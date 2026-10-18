@@ -1,0 +1,6 @@
+{
+  "wasi": 1,
+  "native": 2,
+  "cause": "Guest imports wasi:cli/exit with result<(),()>; numeric nonzero status is lost before the host",
+  "host_cancel": 130
+}
