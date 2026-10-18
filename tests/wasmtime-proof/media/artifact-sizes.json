@@ -1,0 +1,61 @@
+{
+  "gzip": "gzip -n -9 -c; signed Mach-O where applicable",
+  "artifacts": [
+    {
+      "name": "ffmpeg-wasi",
+      "cache_path": "ffmpeg-wasi9-threads/ffmpeg",
+      "stripped_bytes": 1986883,
+      "gzip_n9_bytes": 750809,
+      "sha256": "eda6577fc87e5cac929698e05b89f26de5911e4cc83ad47e37c469330dd5b4e6"
+    },
+    {
+      "name": "ffmpeg-native",
+      "cache_path": "runtimes/native-ffmpeg-stripped",
+      "stripped_bytes": 1525872,
+      "gzip_n9_bytes": 723504,
+      "sha256": "1f3bf7bf2f5ae63c48d78d92b25ea405e5ed705ec408283730263a5edc9d652c"
+    },
+    {
+      "name": "imagemagick-wasi",
+      "cache_path": "im-wasi/utilities/magick",
+      "stripped_bytes": 3717935,
+      "gzip_n9_bytes": 1112387,
+      "sha256": "3bfcfd050f51663355afbba60390eaa65184456fa0772aa77691e917eb98bcfa"
+    },
+    {
+      "name": "imagemagick-native",
+      "cache_path": "im-native/utilities/magick",
+      "stripped_bytes": 2566192,
+      "gzip_n9_bytes": 1384286,
+      "sha256": "086171a0b4cc07568aa9652cf56041b652fd84e4cb1748e08e014c39415a32f6"
+    },
+    {
+      "name": "wasmkit-wrapper",
+      "cache_path": "runtimes/wasmkit-stripped",
+      "stripped_bytes": 2720688,
+      "gzip_n9_bytes": 958867,
+      "sha256": "d6be62cb3bc00d293b524f714cc983b842d1d8d9bcd4623bc7d253eb2b1aa07e"
+    },
+    {
+      "name": "wasmkit-cli-threads",
+      "cache_path": "runtimes/wasmkit-cli-stripped",
+      "stripped_bytes": 3667280,
+      "gzip_n9_bytes": 1331978,
+      "sha256": "97e3621db6af14ccbf3731697917d013584eda864fa448836d257d8df3155e93"
+    },
+    {
+      "name": "pulley-c1-baseline",
+      "cache_path": "runtimes/wasmtime-c1-opt3-baseline-stripped",
+      "stripped_bytes": 18952192,
+      "gzip_n9_bytes": 5959155,
+      "sha256": "a6a174d980a951e7097cfe50d2c69d0138747ced327acf36aa4693db2090b991"
+    },
+    {
+      "name": "pulley-c1-gc-preopen",
+      "cache_path": "runtimes/wasmtime",
+      "stripped_bytes": 19020032,
+      "gzip_n9_bytes": 5982623,
+      "sha256": "2491fb42ec03c11920870dc5f80a0532f36b608233fb23fec79a004c76ac0509"
+    }
+  ]
+}

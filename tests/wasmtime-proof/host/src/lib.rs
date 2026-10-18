@@ -271,6 +271,7 @@ impl Runner {
             .allow_blocking_current_thread(true)
             .stdout(Stream { output, number: 1 })
             .stderr(Stream { output, number: 2 })
+            .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?
             .build_p1();
         let mut store = Store::new(&self.engine, ctx);
         store.set_epoch_deadline(1);

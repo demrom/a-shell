@@ -89,6 +89,10 @@ The current mini candidate has no WasmKit framework. Build the unchanged WasmKit
 
 Measure regular-file bytes of each signed candidate and record installed app size separately if available. Report both the absolute addition to the current mini candidate and the difference against the matched WasmKit baseline. A framework archive's size is neither an installed app delta nor a memory measurement. Restore the driver's saved signed candidate after the proof and verify the next ordinary command. Complete all six numbered rows in `acceptance.md` with physical-device evidence before issuing the GO/NO-GO verdict.
 
+## Real media comparison
+
+The [real media comparison](media/README.md) records pinned FFmpeg 9 and PNG-capable ImageMagick builds, public CLI output checks, five-run host timings and stripped artifact sizes. Its exception-enabled Pulley variant is separate from the original C1 baseline; no media phone qualification is implied.
+
 ## Preview2 gitoxide pkg experiment
 
 [gitoxide/README.md](gitoxide/README.md) contains the pinned wasm32-wasip2 recipe, checked CLI comparisons and cancellation contract. The C1 host now selects stock Preview2 command/HTTP interfaces for Preview2 components; existing Preview1/Preview3 paths remain available. Host command execution preserves the status exposed by WASI (the pinned Preview2 guest reduces failure to 1), and the Mac CLI routes SIGINT through the same public runner cancellation API. Phone qualification of this guest is tracked separately from the earlier Preview3 proof.

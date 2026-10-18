@@ -1,0 +1,165 @@
+{
+  "date": "2026-10-18",
+  "host": "arm64 macOS 26.6.2 25G83",
+  "scope": "Host CLI only; no phone installation or qualification",
+  "boundary": "Real CLI processes; exit status, output bytes, ffprobe/identify; no mocks",
+  "benchmark": {
+    "runs": 5,
+    "warmup": 1,
+    "nice": 15,
+    "heavy_build_process_checks": "clear before and after both benchmarks",
+    "previous_overlap512_run": "excluded",
+    "raw_files": [
+      "ffmpeg-benchmark.json",
+      "imagemagick-benchmark.json"
+    ]
+  },
+  "measured_artifacts": {
+    "wasmkit-wrapper": {
+      "cache_path": "runtimes/wasmkit",
+      "bytes": 5609576,
+      "sha256": "da055c3b7c92e05a37c727e0fa9cf5269e779a2e6f5c57d638cdbc9a32490cf4"
+    },
+    "wasmkit-threads-cli": {
+      "cache_path": "wasmkit-build/release/wasmkit-cli",
+      "bytes": 7504328,
+      "sha256": "7a05d31ed1a6efb3fb402fa0e4fef0af8ed137fa43ff23f6ae50124c6ee67089"
+    },
+    "pulley-c1-gc-preopen": {
+      "cache_path": "runtimes/wasmtime",
+      "bytes": 19020032,
+      "sha256": "2491fb42ec03c11920870dc5f80a0532f36b608233fb23fec79a004c76ac0509"
+    },
+    "pulley-c1-baseline": {
+      "cache_path": "runtimes/wasmtime-c1-opt3-baseline",
+      "bytes": 21657392,
+      "sha256": "dca469ab595848622f76bdcb0d38b52cbe046893ad6097c070d5f296894bdb68"
+    },
+    "native-ffmpeg": {
+      "cache_path": "ffmpeg-native9/ffmpeg",
+      "bytes": 1516552,
+      "sha256": "7af697e12b11b9ff6cd2d0cd6a6ea2cc92a2c2146f5cc4941a09c53a65f30968"
+    },
+    "native-imagemagick": {
+      "cache_path": "im-native/utilities/magick",
+      "bytes": 2566192,
+      "sha256": "086171a0b4cc07568aa9652cf56041b652fd84e4cb1748e08e014c39415a32f6"
+    },
+    "ffmpeg-guest": {
+      "cache_path": "ffmpeg-wasi9-threads/ffmpeg",
+      "bytes": 1986883,
+      "sha256": "eda6577fc87e5cac929698e05b89f26de5911e4cc83ad47e37c469330dd5b4e6"
+    },
+    "imagemagick-guest": {
+      "cache_path": "im-wasi/utilities/magick",
+      "bytes": 3717935,
+      "sha256": "3bfcfd050f51663355afbba60390eaa65184456fa0772aa77691e917eb98bcfa"
+    }
+  },
+  "inputs": {
+    "input.avi": {
+      "cache_path": "fixtures/input.avi",
+      "bytes": 12969362,
+      "sha256": "956fb7fee25722e40df2e14360a50c1ea6b4ce1d4724dbf09e6362b18ab0d85a"
+    },
+    "input.png": {
+      "cache_path": "fixtures/input.png",
+      "bytes": 81902,
+      "sha256": "1d52f455f2db71d383d3216e28c106971df71dfb664fbaf24ab21a7f907866d8"
+    }
+  },
+  "outputs": {
+    "native.avi": {
+      "cache_path": "fixtures/native.avi",
+      "bytes": 200434,
+      "sha256": "7229e72cc41fd5b79205a2be79a50b8004d6c39cc704e5e6ff3c9b3fa9f7aeed"
+    },
+    "wasmkit.avi": {
+      "cache_path": "fixtures/wasmkit.avi",
+      "bytes": 200434,
+      "sha256": "7229e72cc41fd5b79205a2be79a50b8004d6c39cc704e5e6ff3c9b3fa9f7aeed"
+    },
+    "native.ppm": {
+      "cache_path": "fixtures/native.ppm",
+      "bytes": 2359312,
+      "sha256": "ea54d98e780fb40c683fae132e2767b2296a595c507c17a3d6b5b38ab166ce46"
+    },
+    "wasmkit.ppm": {
+      "cache_path": "fixtures/wasmkit.ppm",
+      "bytes": 2359312,
+      "sha256": "ea54d98e780fb40c683fae132e2767b2296a595c507c17a3d6b5b38ab166ce46"
+    },
+    "pulley.ppm": {
+      "cache_path": "fixtures/pulley.ppm",
+      "bytes": 2359312,
+      "sha256": "ea54d98e780fb40c683fae132e2767b2296a595c507c17a3d6b5b38ab166ce46"
+    }
+  },
+  "ffprobe": {
+    "native": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "mpeg4",
+          "width": 160,
+          "height": 90,
+          "duration": "10.000000",
+          "nb_frames": "150"
+        }
+      ]
+    },
+    "wasmkit": {
+      "programs": [],
+      "stream_groups": [],
+      "streams": [
+        {
+          "codec_name": "mpeg4",
+          "width": 160,
+          "height": 90,
+          "duration": "10.000000",
+          "nb_frames": "150"
+        }
+      ]
+    }
+  },
+  "identify": {
+    "native": "PPM 1024 768 8",
+    "wasmkit": "PPM 1024 768 8",
+    "pulley": "PPM 1024 768 8"
+  },
+  "red_green": {
+    "pulley_png_before_p1_preopen": {
+      "exit": 1,
+      "stderr": "magick: UnableToOpenBlob '/private/tmp/wasmkit-task-79mc496/media510/fixtures/input.png': No such file or directory @ error/blob.c/OpenBlob/3684."
+    },
+    "pulley_png_after_p1_preopen": {
+      "exit": 0,
+      "exact_native_bytes": true
+    },
+    "baseline_pulley_png": {
+      "exit": 1,
+      "stderr": "ashell-p3: failed to parse WebAssembly module: exceptions proposal not enabled (at offset 0x12b7)"
+    },
+    "pulley_gc_ffmpeg_threads": {
+      "exit": 1,
+      "stderr": "ashell-p3: failed to parse WebAssembly module: threads must be enabled for shared memories (at offset 0x397)"
+    }
+  },
+  "stripped_copy_checks": {
+    "wasmkit_wrapper": "PNG resize0, bytes equal native",
+    "wasmkit_threads_cli": "real transcode0, bytes equal native",
+    "native_ffmpeg": "version0"
+  },
+  "checks": {
+    "shellcheck": "all four scripts PASS",
+    "patch_forward_pristine_F0": "PASS",
+    "patch_reverse_patched_F0": "PASS",
+    "host_build": "cargo --locked --release --features wasmtime/gc-null -j2 PASS, 22.37s",
+    "codesign": "stripped Mach-O strict verification PASS"
+  },
+  "recommendation": {
+    "ffmpeg": "Keep native; WasmKit fastest runnable tested WASM engine, threads launcher lacks iOS support",
+    "imagemagick": "Keep native; optional pkg under WasmKit if slower execution is acceptable and runtime is already present"
+  }
+}
