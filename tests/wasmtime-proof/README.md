@@ -113,4 +113,4 @@ nice -n 15 clang -O2 -Wall -Wextra "$proof/tty-contract.c" "$CARGO_TARGET_DIR/re
 "$CARGO_TARGET_DIR/tty-contract" "$CARGO_TARGET_DIR/tty.component.wasm"
 ```
 
-The guest is a WASI 0.3.1 component like the other proof guests, not `wasm32-wasip2`: the host links p3 interfaces only, and a `wasm32-wasip2` std binary imports 0.2 interfaces it would not resolve.
+The `tty` guest is a WASI 0.3.1 component built for `wasm32-unknown-unknown`. A Preview2 (`wasm32-wasip2`) component is wired to the same `ashell:tty` bridge on the host's Preview2 path (compiled, not yet exercised by a test).
