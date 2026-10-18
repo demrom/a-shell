@@ -1,6 +1,8 @@
 #include "include/ashell-p3.h"
+#include <limits.h>
 #include <pthread.h>
 #include <string.h>
+#include <time.h>
 
 static pthread_mutex_t active_lock = PTHREAD_MUTEX_INITIALIZER;
 static AshellP3Runner *active;
@@ -27,14 +29,48 @@ int ashell_p3_command(int argc, const char *const *argv, FILE *out, FILE *err) {
  * sees the whole filesystem already, so --dir is accepted and changes nothing.
  * --trusted-precompiled is ours: a .cwasm from the exact trusted build (C2). */
 static const char *const other_subcommands[] = {
-    "compile", "serve", "explore", "wast", "config", "settings", "objdump", "completion", "help",
+    "serve", "explore", "wast", "config", "settings", "objdump", "completion", "help",
 };
 static void usage(FILE *to) {
-    fprintf(to, "usage: wasmtime [run] [--dir HOST[::GUEST]] [--] FILE.wasm [ARGS...]\n");
+    fprintf(to, "usage: wasmtime [run] [--dir HOST[::GUEST]] [--] FILE.wasm [ARGS...]\n       wasmtime compile [-o OUT.cwasm] FILE.wasm\n");
+}
+
+/* Stock `wasmtime compile [-o OUT.cwasm] FILE.wasm`; OUT defaults to FILE with a .cwasm
+ * extension. Publishes atomically and prints the elapsed time. */
+static int compile_command(int argc, const char *const *argv, FILE *out, FILE *err) {
+    const char *outpath = NULL, *input = NULL;
+    for (int i = 2; i < argc; i++) {
+        if ((strcmp(argv[i], "-o") == 0 || strcmp(argv[i], "--output") == 0) && i + 1 < argc) outpath = argv[++i];
+        else if (argv[i][0] != '-' && !input) input = argv[i];
+        else { fprintf(err, "usage: wasmtime compile [-o OUT.cwasm] FILE.wasm\n"); return 2; }
+    }
+    if (!input) { fprintf(err, "usage: wasmtime compile [-o OUT.cwasm] FILE.wasm\n"); return 2; }
+    char derived[PATH_MAX];
+    if (!outpath) {
+        size_t n = strlen(input), dot = n;
+        while (dot > 0 && input[dot - 1] != '.' && input[dot - 1] != '/') dot--;
+        if (dot == 0 || input[dot - 1] == '/') dot = n + 1;
+        snprintf(derived, sizeof derived, "%.*s.cwasm", (int)(dot - 1), input);
+        outpath = derived;
+    }
+    AshellP3Runner *runner = ashell_p3_new();
+    if (!runner) { fprintf(err, "wasmtime: engine creation failed\n"); return 1; }
+    FILE *files[] = { out, err };
+    AshellP3Output sink = { (uintptr_t)files, output };
+    fprintf(out, "wasmtime: compiling %s for this device (one time)...\n", input);
+    fflush(out);
+    struct timespec t0, t1;
+    clock_gettime(CLOCK_MONOTONIC, &t0);
+    int status = ashell_p3_compile(runner, input, outpath, sink);
+    clock_gettime(CLOCK_MONOTONIC, &t1);
+    if (status == 0) fprintf(out, "wasmtime: wrote %s in %.2f s\n", outpath, (double)(t1.tv_sec - t0.tv_sec) + (double)(t1.tv_nsec - t0.tv_nsec) / 1e9);
+    ashell_p3_delete(runner);
+    return status;
 }
 
 int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *tty) {
     int trusted = 0, i = 1;
+    if (i < argc && strcmp(argv[i], "compile") == 0) return compile_command(argc, argv, out, err);
     if (i < argc && strcmp(argv[i], "run") == 0) i++;
     else if (i < argc) {
         for (size_t n = 0; n < sizeof other_subcommands / sizeof *other_subcommands; n++) {
