@@ -1,6 +1,7 @@
 #include "include/ashell-p3.h"
 #include <pthread.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* The fake is the outer boundary only: the a-Shell terminal. The guest, engine and
@@ -87,7 +88,7 @@ int main(int argc, const char *const *argv) {
     AshellP3Runner *runner = ashell_p3_new();
     if (!runner) return 1;
     AshellP3Tty tty = { 0, term_size, term_raw, term_read, term_isatty };
-    const char *key[] = { argv[1], "key" }, *leave[] = { argv[1], "leave" }, *trap[] = { argv[1], "trap" };
+    const char *key[] = { argv[1], "key" }, *leave[] = { argv[1], "leave" }, *trap[] = { argv[1], "trap" }, *envmode[] = { argv[1], "env" };
     struct Run r = { runner, key, 2, -1 };
 
     /* No bridge: the guest's first call fails, nothing reaches the terminal. */
@@ -133,6 +134,20 @@ int main(int argc, const char *const *argv) {
     pthread_join(thread, NULL);
     term_close(); /* the abandoned terminal read returns */
     expect(r.status == 130 && !term.raw && term.raw_off_calls == 1, "cancel with raw on: status 130, host restores cooked");
+
+    /* The guest sees the environment the shell hands over, not the process one;
+     * with none handed over it inherits the process environment. */
+    setenv("ASHELL_TEST_PROCESS", "p", 1);
+    const char *const shell_env[] = { "ASHELL_TEST_SHELL=s", "OTHER=o", NULL };
+    term_reset(0);
+    r.argv = envmode;
+    ashell_p3_set_env(runner, shell_env);
+    run(&r);
+    expect(r.status == 0 && !strcmp(term.out, "ENV:ASHELL_TEST_SHELL=s\n"), "guest environment is the one handed over by the shell");
+    term_reset(0);
+    ashell_p3_set_env(runner, NULL);
+    run(&r);
+    expect(r.status == 0 && !strcmp(term.out, "ENV:ASHELL_TEST_PROCESS=p\n"), "no environment handed over: guest inherits the process environment");
 
     ashell_p3_delete(runner);
     return failures ? 1 : 0;

@@ -169,13 +169,16 @@ impl AsyncRead for TtyStdin {
 }
 
 /// stdout/stderr and, with a terminal bridge, stdin plus the per-stream terminal flags.
-fn wasi_builder(args: &[String], output: Output, tty: Option<Tty>) -> wasmtime_wasi::WasiCtxBuilder {
+fn wasi_builder(args: &[String], output: Output, tty: Option<Tty>, env: Option<Vec<(String, String)>>) -> wasmtime_wasi::WasiCtxBuilder {
     let terminal = |fd| tty.is_some_and(|t| (t.isatty)(t.context, fd) != 0);
     let mut wasi = WasiCtx::builder();
     wasi.args(args)
-        .inherit_env()
         .stdout(Stream { output, number: 1, terminal: terminal(1) })
         .stderr(Stream { output, number: 2, terminal: terminal(2) });
+    match env {
+        Some(env) => wasi.envs(&env),
+        None => wasi.inherit_env(),
+    };
     if let Some(tty) = tty {
         wasi.stdin(TtyStdin { tty, terminal: terminal(0), shared: Arc::default() });
     }
@@ -237,6 +240,7 @@ pub struct Runner {
     cancelled: AtomicBool,
     wake: Notify,
     tty: Mutex<Option<Tty>>,
+    env: Mutex<Option<Vec<(String, String)>>>,
 }
 impl Runner {
     pub fn new() -> Result<Self> {
@@ -249,10 +253,15 @@ impl Runner {
             cancelled: AtomicBool::new(false),
             wake: Notify::new(),
             tty: Mutex::new(None),
+            env: Mutex::new(None),
         })
     }
     /// Offer the terminal bridge to later runs; None withdraws it. A guest that
     /// imports ashell:tty then sees get-size/set-raw fail with unsupported.
+    /// Environment for later guests; None makes them inherit the process environment.
+    pub fn set_env(&self, env: Option<Vec<(String, String)>>) {
+        *self.env.lock().unwrap() = env;
+    }
     pub fn set_tty(&self, tty: Option<Tty>) {
         *self.tty.lock().unwrap() = tty;
     }
@@ -353,7 +362,7 @@ impl Runner {
         wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
         ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let tty = *self.tty.lock().unwrap();
-        let mut wasi = wasi_builder(args, output, tty);
+        let mut wasi = wasi_builder(args, output, tty, self.env.lock().unwrap().clone());
         let mut store = Store::new(
             &self.engine,
             State {
@@ -403,13 +412,14 @@ impl Runner {
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
         ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let tty = *self.tty.lock().unwrap();
-        let mut wasi = wasi_builder(args, output, tty);
+        let mut wasi = wasi_builder(args, output, tty, self.env.lock().unwrap().clone());
         wasi.inherit_network()
             .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?;
         // An iOS sandbox refuses to open the ancestors of the app container, which a
         // capability lookup from "/" must do. A preopen at the container's own absolute
         // path (the longest prefix wins in the guest) avoids opening them.
-        let mut owned = vec![std::env::var("HOME").ok(), std::env::current_dir().ok().and_then(|p| p.to_str().map(String::from))];
+        let shell_home = self.env.lock().unwrap().as_ref().and_then(|env| env.iter().find(|(name, _)| name == "HOME").map(|(_, home)| home.clone()));
+        let mut owned = vec![shell_home.or_else(|| std::env::var("HOME").ok()), std::env::current_dir().ok().and_then(|p| p.to_str().map(String::from))];
         owned.retain(|p| p.as_deref().is_some_and(|p| p.starts_with('/') && p != "/"));
         owned.dedup();
         for dir in owned.into_iter().flatten() {
@@ -526,6 +536,26 @@ pub unsafe extern "C" fn ashell_p3_delete(runner: *mut Runner) {
     if !runner.is_null() {
         drop(unsafe { Box::from_raw(runner) });
     }
+}
+
+/// # Safety
+/// runner is valid; envp is NULL or a NULL-terminated array of valid C strings.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ashell_p3_set_env(runner: *const Runner, envp: *const *const c_char) {
+    let Some(runner) = (unsafe { runner.as_ref() }) else { return };
+    if envp.is_null() {
+        runner.set_env(None);
+        return;
+    }
+    let mut env = Vec::new();
+    let mut at = envp;
+    while !unsafe { *at }.is_null() {
+        if let Some((name, value)) = unsafe { CStr::from_ptr(*at) }.to_str().ok().and_then(|v| v.split_once('=')) {
+            env.push((name.to_owned(), value.to_owned()));
+        }
+        at = unsafe { at.add(1) };
+    }
+    runner.set_env(Some(env));
 }
 
 /// # Safety

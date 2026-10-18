@@ -16,6 +16,8 @@ extern void ios_stopInteractive(void);
 extern int ios_getWindowSize(int *width, int *height, const void *sessionId);
 extern const void *ios_getContext(void);
 extern int ios_isatty(int fd);
+extern char **environmentVariables(pid_t pid);
+extern pid_t ios_currentPid(void);
 extern int ashell_p3_contract(int, const char *const *, FILE *, FILE *);
 
 /* Keys for the guest's stdin. The one watcher below owns the terminal descriptor,
@@ -112,7 +114,9 @@ int wasmtime_main(int argc, char **argv) {
         pthread_setcancelstate(previous_cancel, NULL);
         return 1;
     }
-    int status = ashell_p3_command_tty(argc, (const char *const *)argv, thread_stdout, thread_stderr, &tty);
+    /* `export` lives in ios_system, not in the process environ. */
+    int status = ashell_p3_command_env(argc, (const char *const *)argv, thread_stdout, thread_stderr, &tty,
+        (const char *const *)environmentVariables(ios_currentPid()));
     char done = 1;
     if (write(stop[1], &done, 1) != 1) status = 1;
     pthread_join(watcher, NULL);

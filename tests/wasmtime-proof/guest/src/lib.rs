@@ -130,6 +130,15 @@ async fn tty() -> Result<(), ()> {
     use ashell::tty::tty::{get_size, set_raw};
     let args = wasi::cli::environment::get_arguments();
     let mode = args.get(1).map(String::as_str).unwrap_or("key");
+    if mode == "env" {
+        let mut pairs: Vec<_> = wasi::cli::environment::get_environment().into_iter()
+            .filter(|(name, _)| name.starts_with("ASHELL_TEST_")).collect();
+        pairs.sort();
+        for (name, value) in pairs {
+            write(format!("ENV:{name}={value}\n").into_bytes()).await?;
+        }
+        return Ok(());
+    }
     let terminal = (
         wasi::cli::terminal_stdin::get_terminal_stdin().is_some(),
         wasi::cli::terminal_stdout::get_terminal_stdout().is_some(),
