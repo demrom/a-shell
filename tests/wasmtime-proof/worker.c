@@ -15,6 +15,7 @@ extern void ios_startInteractive(void);
 extern void ios_stopInteractive(void);
 extern int ios_getWindowSize(int *width, int *height, const void *sessionId);
 extern const void *ios_getContext(void);
+extern int ios_isatty(int fd);
 extern int ashell_p3_contract(int, const char *const *, FILE *, FILE *);
 
 /* Keys for the guest's stdin. The one watcher below owns the terminal descriptor,
@@ -37,13 +38,21 @@ static int32_t tty_size(uintptr_t context, uint32_t *columns, uint32_t *rows) {
     *rows = (uint32_t)height;
     return 0;
 }
-/* Interactive mode already carries the whole command: the watcher needs it to see
- * Ctrl-C. Raw therefore selects nothing further here, and the command's exit
- * restores the entry mode, which also covers a guest that left raw on. */
+/* ios_startInteractive sets the app's interactiveCommandRunning, which makes the
+ * terminal write each key straight to the command's stdin instead of line editing;
+ * ios_system does the same for native TUIs. It is already held for this whole
+ * command so the watcher sees Ctrl-C as byte 3 (in line mode Ctrl-C goes to
+ * ios_kill instead). Raw therefore selects nothing further, and the entry mode is
+ * restored when the command ends, which also covers a guest that left raw on. */
 static int32_t tty_raw(uintptr_t context, int32_t enabled) {
     (void)context;
     if (enabled) ios_startInteractive();
     return 0;
+}
+static int32_t tty_isatty(uintptr_t context, int32_t fd) {
+    (void)context;
+    FILE *stream = fd == 0 ? thread_stdin : fd == 1 ? thread_stdout : fd == 2 ? thread_stderr : NULL;
+    return stream && ios_isatty(fileno(stream));
 }
 static intptr_t tty_read(uintptr_t context, uint8_t *bytes, size_t length) {
     struct Keys *keys = (struct Keys *)context;
@@ -94,7 +103,7 @@ int p3proof_ios_main(int argc, char **argv) {
         return 1;
     }
     pthread_mutex_init(&keys->lock, NULL);
-    AshellP3Tty tty = { (uintptr_t)keys, tty_size, tty_raw, tty_read };
+    AshellP3Tty tty = { (uintptr_t)keys, tty_size, tty_raw, tty_read, tty_isatty };
     struct Input input = { fileno(thread_stdin), stop[0], keys->fds[1] };
     pthread_t watcher;
     if (pthread_create(&watcher, NULL, watch_input, &input)) {

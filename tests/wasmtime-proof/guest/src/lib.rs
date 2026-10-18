@@ -130,6 +130,12 @@ async fn tty() -> Result<(), ()> {
     use ashell::tty::tty::{get_size, set_raw};
     let args = wasi::cli::environment::get_arguments();
     let mode = args.get(1).map(String::as_str).unwrap_or("key");
+    let terminal = (
+        wasi::cli::terminal_stdin::get_terminal_stdin().is_some(),
+        wasi::cli::terminal_stdout::get_terminal_stdout().is_some(),
+        wasi::cli::terminal_stderr::get_terminal_stderr().is_some(),
+    );
+    write(format!("TERMINAL=stdin:{} stdout:{} stderr:{}\n", terminal.0, terminal.1, terminal.2).into_bytes()).await?;
     let size = get_size().map_err(|_| ())?;
     write(format!("SIZE={}x{}\n", size.columns, size.rows).into_bytes()).await?;
     set_raw(true).map_err(|_| ())?;

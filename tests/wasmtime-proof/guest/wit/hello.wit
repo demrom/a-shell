@@ -17,5 +17,8 @@ world tty {
     import wasi:cli/environment@0.3.1;
     import wasi:cli/stdin@0.3.1;
     import wasi:cli/stdout@0.3.1;
+    import wasi:cli/terminal-stdin@0.3.1;
+    import wasi:cli/terminal-stdout@0.3.1;
+    import wasi:cli/terminal-stderr@0.3.1;
     export wasi:cli/run@0.3.1;
 }

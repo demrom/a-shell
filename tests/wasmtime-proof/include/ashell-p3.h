@@ -30,13 +30,16 @@ void ashell_p3_cancel(const AshellP3Runner *);
  * the shell's line input; the host calls raw(0) when a guest that left raw mode
  * on returns, traps or is cancelled. read blocks until a byte exists and returns
  * it unbuffered (count, 0 at EOF, -1 on error); a read in flight at cancellation
- * is abandoned, so it must return once the terminal is released. All callbacks
+ * is abandoned, so it must return once the terminal is released. isatty(fd) for
+ * fd 0, 1, 2 (ios_isatty on the command's streams) decides whether the guest's
+ * wasi:cli terminal-stdin/stdout/stderr return a handle. All callbacks
  * are thread-safe and the context outlives every run that uses it. */
 typedef struct {
     uintptr_t context;
     int32_t (*size)(uintptr_t context, uint32_t *columns, uint32_t *rows);
     int32_t (*raw)(uintptr_t context, int32_t enabled);
     intptr_t (*read)(uintptr_t context, uint8_t *bytes, size_t length);
+    int32_t (*isatty)(uintptr_t context, int32_t fd);
 } AshellP3Tty;
 /* NULL withdraws the bridge. Without it a guest importing ashell:tty gets
  * error-code unsupported and stdin stays EOF. Set it between runs. */

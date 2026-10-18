@@ -9,7 +9,7 @@
 struct Terminal {
     pthread_mutex_t lock;
     pthread_cond_t changed;
-    int raw, raw_off_calls, closed, send_key, reads_while_cooked;
+    int raw, raw_off_calls, closed, send_key, reads_while_cooked, isatty[3];
     char out[1024], err[1024];
 };
 static struct Terminal term = { .lock = PTHREAD_MUTEX_INITIALIZER, .changed = PTHREAD_COND_INITIALIZER };
@@ -37,8 +37,13 @@ static intptr_t term_read(uintptr_t c, uint8_t *bytes, size_t length) {
     pthread_mutex_unlock(&term.lock);
     return n;
 }
+static int32_t term_isatty(uintptr_t c, int32_t fd) {
+    (void)c;
+    return fd >= 0 && fd < 3 ? term.isatty[fd] : 0;
+}
 static void term_reset(int send_key) {
     pthread_mutex_lock(&term.lock);
+    term.isatty[0] = term.isatty[1] = 1; term.isatty[2] = 0; /* stderr redirected */
     term.raw = term.raw_off_calls = term.closed = term.reads_while_cooked = 0;
     term.send_key = send_key;
     term.out[0] = term.err[0] = 0;
@@ -81,21 +86,28 @@ int main(int argc, const char *const *argv) {
     if (argc != 2) { fprintf(stderr, "usage: tty-contract TTY.component.wasm\n"); return 2; }
     AshellP3Runner *runner = ashell_p3_new();
     if (!runner) return 1;
-    AshellP3Tty tty = { 0, term_size, term_raw, term_read };
+    AshellP3Tty tty = { 0, term_size, term_raw, term_read, term_isatty };
     const char *key[] = { argv[1], "key" }, *leave[] = { argv[1], "leave" }, *trap[] = { argv[1], "trap" };
     struct Run r = { runner, key, 2, -1 };
 
     /* No bridge: the guest's first call fails, nothing reaches the terminal. */
     term_reset(1);
     run(&r);
-    expect(r.status == 1 && !strstr(term.out, "SIZE=") && !term.raw, "no bridge: get-size unsupported, status 1");
+    expect(r.status == 1 && !strcmp(term.out, "TERMINAL=stdin:false stdout:false stderr:false\n") && !term.raw, "no bridge: no terminal handles, get-size unsupported, status 1");
 
     /* Size, raw on, an arrow key read unbuffered (no EOF is ever sent), raw off. */
     ashell_p3_set_tty(runner, &tty);
     term_reset(1);
     run(&r);
-    expect(r.status == 0 && !strcmp(term.out, "SIZE=80x24\nRAW=on\nKEYS=1b5b41\nRAW=off\n"), "size, raw, arrow key, raw off: exact stdout, status 0");
+    expect(r.status == 0 && !strcmp(term.out, "TERMINAL=stdin:true stdout:true stderr:false\nSIZE=80x24\nRAW=on\nKEYS=1b5b41\nRAW=off\n"), "terminal handles follow isatty per stream; size, raw, arrow key, raw off: exact stdout, status 0");
     expect(!term.raw && term.reads_while_cooked == 0, "terminal cooked after exit; no read happened in cooked mode");
+
+    /* stdout redirected to a file, stderr on the terminal: handles follow each stream. */
+    term_reset(0);
+    term.isatty[1] = 0; term.isatty[2] = 1;
+    r.argv = leave;
+    run(&r);
+    expect(r.status == 0 && !strncmp(term.out, "TERMINAL=stdin:true stdout:false stderr:true\n", 45), "redirected stdout and terminal stderr are reported per stream");
 
     /* The guest returns with raw on: the host restores the terminal. */
     term_reset(0);
