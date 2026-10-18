@@ -1,0 +1,16 @@
+[
+  {
+    "boundary": "cli",
+    "status": 130,
+    "request": "/repo.git/info/refs?service=git-upload-pack",
+    "stdout": "",
+    "stderr": "ashell-p3: guest cancelled\n"
+  },
+  {
+    "boundary": "abi",
+    "status": 0,
+    "request": "/repo.git/info/refs?service=git-upload-pack",
+    "stdout": "gix 0.60.0\nCANCEL_STATUS=130 SAME_RUNNER_RECOVERY=0\n",
+    "stderr": "ashell-p3: guest cancelled\n"
+  }
+]

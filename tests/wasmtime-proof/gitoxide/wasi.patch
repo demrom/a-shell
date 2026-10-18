@@ -1,0 +1,1262 @@
+diff -ruN a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock	2026-10-08 12:31:05.000000000 +0300
++++ b/Cargo.lock	2026-10-18 14:27:22.058407811 +0300
+@@ -9,6 +9,18 @@
+ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
+ 
+ [[package]]
++name = "ahash"
++version = "0.8.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
++dependencies = [
++ "cfg-if",
++ "once_cell",
++ "version_check",
++ "zerocopy",
++]
++
++[[package]]
+ name = "aho-corasick"
+ version = "1.1.4"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -74,7 +86,7 @@
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
+ dependencies = [
+- "windows-sys 0.60.2",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -85,7 +97,7 @@
+ dependencies = [
+  "anstyle",
+  "once_cell_polyfill",
+- "windows-sys 0.60.2",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -852,7 +864,7 @@
+  "openssl-sys",
+  "schannel",
+  "socket2",
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -868,7 +880,7 @@
+  "pkg-config",
+  "rustls-ffi",
+  "vcpkg",
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -1045,7 +1057,7 @@
+  "libc",
+  "option-ext",
+  "redox_users",
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -1148,7 +1160,7 @@
+ checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
+ dependencies = [
+  "libc",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -2018,7 +2030,7 @@
+  "gix-hash",
+  "gix-imara-diff",
+  "gix-object",
+- "hashbrown 0.16.1",
++ "hashbrown 0.17.1",
+ ]
+ 
+ [[package]]
+@@ -2661,6 +2673,7 @@
+  "pin-project-lite",
+  "reqwest",
+  "serde",
++ "waki",
+ ]
+ 
+ [[package]]
+@@ -2880,6 +2893,9 @@
+ version = "0.14.5"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "e5274423e17b7c9fc20b6e7e208532f9b19825d82dfd615708b70edd83df41f1"
++dependencies = [
++ "ahash",
++]
+ 
+ [[package]]
+ name = "hashbrown"
+@@ -3216,6 +3232,12 @@
+ ]
+ 
+ [[package]]
++name = "id-arena"
++version = "2.3.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3d3067d79b975e8844ca9eb072e16b31c3c1c36928edf9c6789548c524d0d954"
++
++[[package]]
+ name = "ident_case"
+ version = "1.0.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -3250,6 +3272,8 @@
+ dependencies = [
+  "equivalent",
+  "hashbrown 0.17.1",
++ "serde",
++ "serde_core",
+ ]
+ 
+ [[package]]
+@@ -3604,6 +3628,12 @@
+ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+ 
+ [[package]]
++name = "leb128"
++version = "0.2.7"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c83bff1d572d6b9aeef67ddfc8448e4a3737909cb28e81f97c791b9018703e52"
++
++[[package]]
+ name = "libc"
+ version = "0.2.186"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -3889,7 +3919,7 @@
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
+ dependencies = [
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4229,6 +4259,16 @@
+ ]
+ 
+ [[package]]
++name = "prettyplease"
++version = "0.2.37"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
++dependencies = [
++ "proc-macro2",
++ "syn 2.0.118",
++]
++
++[[package]]
+ name = "proc-macro-crate"
+ version = "3.5.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -4726,7 +4766,7 @@
+  "errno",
+  "libc",
+  "linux-raw-sys",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -4817,7 +4857,7 @@
+  "security-framework",
+  "security-framework-sys",
+  "webpki-root-certs 1.0.8",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5103,7 +5143,16 @@
+ checksum = "52d1cfed4120b4d927bf7c0f86d2087a4a7d6027c906d9f9d525a80573b9be51"
+ dependencies = [
+  "libc",
+- "windows-sys 0.60.2",
++ "windows-sys 0.61.2",
++]
++
++[[package]]
++name = "spdx"
++version = "0.10.9"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c3e17e880bafaeb362a7b751ec46bdc5b61445a188f80e0606e68167cd540fa3"
++dependencies = [
++ "smallvec",
+ ]
+ 
+ [[package]]
+@@ -5288,7 +5337,7 @@
+  "getrandom 0.4.3",
+  "once_cell",
+  "rustix",
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5333,7 +5382,7 @@
+ checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+ dependencies = [
+  "rustix",
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -5788,6 +5837,12 @@
+ checksum = "b4ac048d71ede7ee76d585517add45da530660ef4390e49b098733c6e897f254"
+ 
+ [[package]]
++name = "unicode-xid"
++version = "0.2.6"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
++
++[[package]]
+ name = "untrusted"
+ version = "0.9.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -5847,6 +5902,12 @@
+ checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
+ 
+ [[package]]
++name = "version_check"
++version = "0.9.5"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
++
++[[package]]
+ name = "vte"
+ version = "0.14.1"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -5856,6 +5917,31 @@
+ ]
+ 
+ [[package]]
++name = "waki"
++version = "0.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "6e2db2daf1dfbadf228fd8b3c22b96a359135fd673b3d2c203274ee6a0df9c77"
++dependencies = [
++ "anyhow",
++ "form_urlencoded",
++ "http",
++ "serde",
++ "waki-macros",
++ "wit-bindgen 0.34.0",
++]
++
++[[package]]
++name = "waki-macros"
++version = "0.5.1"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a061143f321cc5eeb523f60bdbcd45cfc3ee8851f8cf24f7a4b963bddc5642eb"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn 2.0.118",
++]
++
++[[package]]
+ name = "walkdir"
+ version = "2.5.0"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -5886,7 +5972,7 @@
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "b67efb37e106e55ce722a510d6b5f9c17f083e5fc79afc2badeb12cc313d9487"
+ dependencies = [
+- "wit-bindgen",
++ "wit-bindgen 0.57.1",
+ ]
+ 
+ [[package]]
+@@ -5945,6 +6031,45 @@
+ ]
+ 
+ [[package]]
++name = "wasm-encoder"
++version = "0.219.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "8aa79bcd666a043b58f5fa62b221b0b914dd901e6f620e8ab7371057a797f3e1"
++dependencies = [
++ "leb128",
++ "wasmparser",
++]
++
++[[package]]
++name = "wasm-metadata"
++version = "0.219.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "b1ef51bd442042a2a7b562dddb6016ead52c4abab254c376dcffc83add2c9c34"
++dependencies = [
++ "anyhow",
++ "indexmap",
++ "serde",
++ "serde_derive",
++ "serde_json",
++ "spdx",
++ "wasm-encoder",
++ "wasmparser",
++]
++
++[[package]]
++name = "wasmparser"
++version = "0.219.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "5220ee4c6ffcc0cb9d7c47398052203bc902c8ef3985b0c8134118440c0b2921"
++dependencies = [
++ "ahash",
++ "bitflags 2.13.0",
++ "hashbrown 0.14.5",
++ "indexmap",
++ "semver",
++]
++
++[[package]]
+ name = "web-sys"
+ version = "0.3.103"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+@@ -6010,7 +6135,7 @@
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+ checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
+ dependencies = [
+- "windows-sys 0.52.0",
++ "windows-sys 0.61.2",
+ ]
+ 
+ [[package]]
+@@ -6396,7 +6521,17 @@
+ checksum = "7d6f32a0ff4a9f6f01231eb2059cc85479330739333e0e58cadf03b6af2cca10"
+ dependencies = [
+  "cfg-if",
+- "windows-sys 0.59.0",
++ "windows-sys 0.61.2",
++]
++
++[[package]]
++name = "wit-bindgen"
++version = "0.34.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7e11ad55616555605a60a8b2d1d89e006c2076f46c465c892cc2c153b20d4b30"
++dependencies = [
++ "wit-bindgen-rt",
++ "wit-bindgen-rust-macro",
+ ]
+ 
+ [[package]]
+@@ -6406,6 +6541,94 @@
+ checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+ 
+ [[package]]
++name = "wit-bindgen-core"
++version = "0.34.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "163cee59d3d5ceec0b256735f3ab0dccac434afb0ec38c406276de9c5a11e906"
++dependencies = [
++ "anyhow",
++ "heck",
++ "wit-parser",
++]
++
++[[package]]
++name = "wit-bindgen-rt"
++version = "0.34.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "744845cde309b8fa32408d6fb67456449278c66ea4dcd96de29797b302721f02"
++dependencies = [
++ "bitflags 2.13.0",
++]
++
++[[package]]
++name = "wit-bindgen-rust"
++version = "0.34.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "f6919521fc7807f927a739181db93100ca7ed03c29509b84d5f96b27b2e49a9a"
++dependencies = [
++ "anyhow",
++ "heck",
++ "indexmap",
++ "prettyplease",
++ "syn 2.0.118",
++ "wasm-metadata",
++ "wit-bindgen-core",
++ "wit-component",
++]
++
++[[package]]
++name = "wit-bindgen-rust-macro"
++version = "0.34.0"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "c967731fc5d50244d7241ecfc9302a8929db508eea3c601fbc5371b196ba38a5"
++dependencies = [
++ "anyhow",
++ "prettyplease",
++ "proc-macro2",
++ "quote",
++ "syn 2.0.118",
++ "wit-bindgen-core",
++ "wit-bindgen-rust",
++]
++
++[[package]]
++name = "wit-component"
++version = "0.219.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4b8479a29d81c063264c3ab89d496787ef78f8345317a2dcf6dece0f129e5fcd"
++dependencies = [
++ "anyhow",
++ "bitflags 2.13.0",
++ "indexmap",
++ "log",
++ "serde",
++ "serde_derive",
++ "serde_json",
++ "wasm-encoder",
++ "wasm-metadata",
++ "wasmparser",
++ "wit-parser",
++]
++
++[[package]]
++name = "wit-parser"
++version = "0.219.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ca004bb251010fe956f4a5b9d4bf86b4e415064160dd6669569939e8cbf2504f"
++dependencies = [
++ "anyhow",
++ "id-arena",
++ "indexmap",
++ "log",
++ "semver",
++ "serde",
++ "serde_derive",
++ "serde_json",
++ "unicode-xid",
++ "wasmparser",
++]
++
++[[package]]
+ name = "writeable"
+ version = "0.6.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+diff -ruN a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/Cargo.toml	2026-10-18 14:26:52.814971314 +0300
+@@ -29,6 +29,7 @@
+ doctest = false
+ 
+ [features]
++http-client-wasi = ["gix/blocking-http-transport-wasi"]
+ default = ["max"]
+ 
+ #! ### Build Configuration
+diff -ruN a/gitoxide-core/Cargo.toml b/gitoxide-core/Cargo.toml
+--- a/gitoxide-core/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/gitoxide-core/Cargo.toml	2026-10-18 14:20:00.316154341 +0300
+@@ -55,7 +55,7 @@
+ 
+ [dependencies]
+ # deselect everything else (like "performance") as this should be controllable by the parent application.
+-gix = { version = "^0.89.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "interrupt", "status", "dirwalk", "command"] }
++gix = { version = "^0.89.0", path = "../gix", default-features = false, features = ["merge", "blob-diff", "blame", "revision", "mailmap", "excludes", "attributes", "worktree-mutation", "credentials", "status", "dirwalk", "command"] }
+ gix-pack-for-configuration-only = { package = "gix-pack", version = "^0.76.0", path = "../gix-pack", default-features = false, features = ["pack-cache-lru-dynamic", "pack-cache-lru-static", "generate", "streaming-input"] }
+ gix-transport-configuration-only = { package = "gix-transport", version = "^0.61.0", path = "../gix-transport", default-features = false }
+ gix-archive-for-configuration-only = { package = "gix-archive", version = "^0.38.0", path = "../gix-archive", optional = true, features = ["tar", "tar_gz"] }
+@@ -100,7 +100,6 @@
+ 
+ # for svg graph output
+ layout-rs = "0.1.3"
+-open = "5.3.5"
+ 
+ document-features = { version = "0.2.0", optional = true }
+ 
+@@ -140,3 +139,7 @@
+     # Imported as crate `layout`, which does not match the package name `layout-rs`.
+     "layout-rs",
+ ]
++
++[target.'cfg(not(target_os = "wasi"))'.dependencies]
++gix = { version = "^0.89.0", path = "../gix", default-features = false, features = ["interrupt"] }
++open = "5.3.5"
+diff -ruN a/gitoxide-core/src/repository/fetch.rs b/gitoxide-core/src/repository/fetch.rs
+--- a/gitoxide-core/src/repository/fetch.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gitoxide-core/src/repository/fetch.rs	2026-10-18 14:20:23.659502137 +0300
+@@ -172,7 +172,10 @@
+         let mut svg = SVGWriter::new();
+         vg.do_it(false, false, false, &mut svg);
+         std::fs::write(path, svg.finalize().as_bytes()).or_error()?;
++        #[cfg(not(target_os = "wasi"))]
+         open::that(path).or_error()?;
++        #[cfg(target_os = "wasi")]
++        Err::<(), _>(std::io::Error::new(std::io::ErrorKind::Unsupported, "WASI cannot launch a desktop viewer")).or_error()?;
+         progress.show_throughput(start);
+ 
+         return Ok(());
+diff -ruN a/gitoxide-core/src/repository/revision/list.rs b/gitoxide-core/src/repository/revision/list.rs
+--- a/gitoxide-core/src/repository/revision/list.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gitoxide-core/src/repository/revision/list.rs	2026-10-18 14:58:06.815070071 +0300
+@@ -130,7 +130,10 @@
+             let mut svg = SVGWriter::new();
+             vg.do_it(false, false, false, &mut svg);
+             std::fs::write(&path, svg.finalize().as_bytes()).or_error()?;
++            #[cfg(not(target_os = "wasi"))]
+             open::that(path).or_error()?;
++            #[cfg(target_os = "wasi")]
++            Err::<(), _>(std::io::Error::new(std::io::ErrorKind::Unsupported, "WASI cannot launch a desktop viewer")).or_error()?;
+             progress.show_throughput(start);
+         }
+         return Ok(());
+diff -ruN a/gix/Cargo.toml b/gix/Cargo.toml
+--- a/gix/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/gix/Cargo.toml	2026-10-18 14:26:52.815893940 +0300
+@@ -28,6 +28,7 @@
+ required-features = ["notes"]
+ 
+ [features]
++blocking-http-transport-wasi = ["blocking-network-client", "gix-transport/http-client-wasi"]
+ 
+ default = ["max-performance-safe", "comfort", "basic", "extras", "auto-chain-error", "sha1"]
+ 
+diff -ruN a/gix-commitgraph/src/file/init.rs b/gix-commitgraph/src/file/init.rs
+--- a/gix-commitgraph/src/file/init.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-commitgraph/src/file/init.rs	2026-10-18 14:41:21.206640704 +0300
+@@ -27,7 +27,11 @@
+     ///
+     /// Note that `path` is only used for verification of the hash its basename contains, but otherwise
+     /// is not of importance.
+-    pub fn new(data: memmap2::Mmap, path: PathBuf) -> Result<File> {
++    pub fn new(
++        #[cfg(not(target_os = "wasi"))] data: memmap2::Mmap,
++        #[cfg(target_os = "wasi")] data: Vec<u8>,
++        path: PathBuf,
++    ) -> Result<File> {
+         let data_size = data.len();
+         if data_size < MIN_FILE_SIZE {
+             bail!(corruption("Commit-graph file too small even for an empty graph"));
+@@ -182,6 +186,9 @@
+     type Error = gix_error::Error;
+ 
+     fn try_from(path: &Path) -> Result<Self> {
++        #[cfg(target_os = "wasi")]
++        let data = std::fs::read(path).or_raise(|| message("Could not read commit-graph file"))?;
++        #[cfg(not(target_os = "wasi"))]
+         let data = std::fs::File::open(path)
+             .and_then(|file| {
+                 // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
+diff -ruN a/gix-commitgraph/src/lib.rs b/gix-commitgraph/src/lib.rs
+--- a/gix-commitgraph/src/lib.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-commitgraph/src/lib.rs	2026-10-18 14:41:21.206272787 +0300
+@@ -26,7 +26,10 @@
+     base_graph_count: u8,
+     base_graphs_list_offset: Option<usize>,
+     commit_data_offset: usize,
++    #[cfg(not(target_os = "wasi"))]
+     data: memmap2::Mmap,
++    #[cfg(target_os = "wasi")]
++    data: Vec<u8>,
+     extra_edges_list_range: Option<std::ops::Range<usize>>,
+     fan: [u32; file::FAN_LEN],
+     oid_lookup_offset: usize,
+diff -ruN a/gix-index/src/file/init.rs b/gix-index/src/file/init.rs
+--- a/gix-index/src/file/init.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-index/src/file/init.rs	2026-10-18 14:58:06.815834576 +0300
+@@ -76,7 +76,17 @@
+                     source,
+                 })
+                 .or_error()?;
++            #[cfg(target_os = "wasi")]
++            let data = {
++                let mut data = Vec::new();
++                std::io::Read::read_to_end(&mut file, &mut data)
++                    .or_raise(|| message("An IO error occurred while reading the index"))?;
++                // Hashing below must read the same opened file, starting at byte zero.
++                std::io::Seek::rewind(&mut file).or_error()?;
++                data
++            };
+             // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
++            #[cfg(not(target_os = "wasi"))]
+             #[expect(unsafe_code)]
+             let data = unsafe { memmap2::MmapOptions::new().map_copy_read_only(&file) }
+                 .or_raise(|| message("An IO error occurred while opening the index"))?;
+@@ -109,11 +119,16 @@
+ 
+             (
+                 data,
+-                filetime::FileTime::from_last_modification_time(
+-                    &file
+-                        .metadata()
+-                        .or_raise(|| message("An IO error occurred while opening the index"))?,
+-                ),
++                {
++                    let metadata = file.metadata().or_raise(|| message("An IO error occurred while opening the index"))?;
++                    #[cfg(not(target_os = "wasi"))]
++                    let timestamp = filetime::FileTime::from_last_modification_time(&metadata);
++                    #[cfg(target_os = "wasi")]
++                    let timestamp = filetime::FileTime::from_system_time(
++                        metadata.modified().or_raise(|| message("Could not read index modification time"))?,
++                    );
++                    timestamp
++                },
+             )
+         };
+ 
+diff -ruN a/gix-odb/src/store_impls/loose/find.rs b/gix-odb/src/store_impls/loose/find.rs
+--- a/gix-odb/src/store_impls/loose/find.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-odb/src/store_impls/loose/find.rs	2026-10-18 14:41:21.205316744 +0300
+@@ -188,7 +188,7 @@
+         Ok(())
+     }
+ 
+-    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<memmap2::Mmap>> {
++    fn map_loose_object(&self, path: &std::path::Path) -> Result<Option<gix_pack::MMap>> {
+         let map = match mmap::read_only(path) {
+             Ok(map) => map,
+             Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+@@ -204,7 +204,13 @@
+ mod mmap {
+     use std::path::Path;
+ 
+-    pub fn read_only(path: &Path) -> std::io::Result<memmap2::Mmap> {
++    #[cfg(target_os = "wasi")]
++    pub fn read_only(path: &Path) -> std::io::Result<gix_pack::MMap> {
++        std::fs::read(path)
++    }
++
++    #[cfg(not(target_os = "wasi"))]
++    pub fn read_only(path: &Path) -> std::io::Result<gix_pack::MMap> {
+         let file = std::fs::File::open(path)?;
+         // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
+         #[allow(unsafe_code)]
+diff -ruN a/gix-pack/Cargo.toml b/gix-pack/Cargo.toml
+--- a/gix-pack/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-pack/Cargo.toml	2026-10-18 14:17:31.699233432 +0300
+@@ -75,7 +75,7 @@
+ document-features = { version = "0.2.0", optional = true }
+ 
+ 
+-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
++[target.'cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))'.dependencies]
+ gix-tempfile = { version = "^26.0.0", default-features = false, path = "../gix-tempfile", optional = true }
+ 
+ [dev-dependencies]
+diff -ruN a/gix-pack/src/bundle/write/mod.rs b/gix-pack/src/bundle/write/mod.rs
+--- a/gix-pack/src/bundle/write/mod.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-pack/src/bundle/write/mod.rs	2026-10-18 14:41:21.204605411 +0300
+@@ -380,7 +380,7 @@
+     }
+ }
+ 
+-fn resolve_entry(range: data::EntryRange, mapped_file: &memmap2::Mmap) -> Option<&[u8]> {
++fn resolve_entry(range: data::EntryRange, mapped_file: &crate::MMap) -> Option<&[u8]> {
+     mapped_file.get(range.start as usize..range.end as usize)
+ }
+ 
+@@ -388,8 +388,8 @@
+ fn new_pack_file_resolver(
+     data_file: SharedTempFile,
+ ) -> io::Result<(
+-    impl Fn(data::EntryRange, &memmap2::Mmap) -> Option<&[u8]> + Send + Clone,
+-    memmap2::Mmap,
++    impl Fn(data::EntryRange, &crate::MMap) -> Option<&[u8]> + Send + Clone,
++    crate::MMap,
+ )> {
+     let mut guard = data_file.lock();
+     guard.flush()?;
+diff -ruN a/gix-pack/src/lib.rs b/gix-pack/src/lib.rs
+--- a/gix-pack/src/lib.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-pack/src/lib.rs	2026-10-18 14:41:21.203978077 +0300
+@@ -21,7 +21,11 @@
+ use std::{borrow::Cow, ops::Deref, path::Path};
+ 
+ /// The default memory-backed storage for pack data and index files.
++#[cfg(not(target_os = "wasi"))]
+ pub use memmap2::Mmap as MMap;
++/// File bytes held in guest memory because WASI has no memory mapping.
++#[cfg(target_os = "wasi")]
++pub type MMap = Vec<u8>;
+ 
+ /// A byte-oriented backing store for pack data and indices.
+ pub trait FileData: Deref<Target = [u8]> {}
+@@ -64,7 +68,13 @@
+ mod mmap {
+     use std::path::Path;
+ 
+-    pub fn read_only(path: &Path) -> std::io::Result<memmap2::Mmap> {
++    #[cfg(target_os = "wasi")]
++    pub fn read_only(path: &Path) -> std::io::Result<crate::MMap> {
++        std::fs::read(path)
++    }
++
++    #[cfg(not(target_os = "wasi"))]
++    pub fn read_only(path: &Path) -> std::io::Result<crate::MMap> {
+         let file = std::fs::File::open(path)?;
+         // SAFETY: we have to take the risk of somebody changing the file underneath. Git never writes into the same file.
+         #[expect(unsafe_code)]
+diff -ruN a/gix-tempfile/src/forksafe.rs b/gix-tempfile/src/forksafe.rs
+--- a/gix-tempfile/src/forksafe.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-tempfile/src/forksafe.rs	2026-10-18 14:32:44.976663862 +0300
+@@ -115,7 +115,7 @@
+ pub(crate) struct ForksafeTempfile {
+     inner: TempfileOrTemppath,
+     cleanup: AutoRemove,
+-    pub owning_process_id: u32,
++    pub owning_process_id: Option<u32>,
+ }
+ 
+ impl ForksafeTempfile {
+@@ -127,7 +127,7 @@
+                 Writable => TempfileOrTemppath::Tempfile(tempfile),
+             },
+             cleanup,
+-            owning_process_id: std::process::id(),
++            owning_process_id: process_id(),
+         }
+     }
+ }
+@@ -247,3 +247,11 @@
+         std::mem::forget(temppath); // leak memory to prevent deallocation
+     }
+ }
++
++// A WASI component cannot fork, so there is no process boundary to distinguish.
++pub(crate) fn process_id() -> Option<u32> {
++    #[cfg(target_os = "wasi")]
++    { None }
++    #[cfg(not(target_os = "wasi"))]
++    { Some(std::process::id()) }
++}
+diff -ruN a/gix-tempfile/src/registry.rs b/gix-tempfile/src/registry.rs
+--- a/gix-tempfile/src/registry.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-tempfile/src/registry.rs	2026-10-18 14:32:44.977113279 +0300
+@@ -10,7 +10,7 @@
+ /// at the expense of possibly missing a lock file if another thread wants to obtain it or put it back
+ /// (i.e. mutates the registry shard).
+ pub fn cleanup_tempfiles_signal_safe() {
+-    let current_pid = std::process::id();
++    let current_pid = crate::forksafe::process_id();
+     #[cfg(feature = "hp-hashmap")]
+     {
+         use std::sync::atomic::Ordering;
+@@ -49,7 +49,7 @@
+ ///
+ /// Must not be called from within signal hooks. For that, use [`cleanup_tempfiles_signal_safe()`].
+ pub fn cleanup_tempfiles() {
+-    let current_pid = std::process::id();
++    let current_pid = crate::forksafe::process_id();
+     #[cfg(feature = "hp-hashmap")]
+     REGISTRY.iter_mut().for_each(|mut tf| {
+         if tf.as_ref().is_some_and(|tf| tf.owning_process_id == current_pid) {
+diff -ruN a/gix-transport/Cargo.toml b/gix-transport/Cargo.toml
+--- a/gix-transport/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-transport/Cargo.toml	2026-10-18 14:26:52.816462815 +0300
+@@ -15,6 +15,7 @@
+ doctest = false
+ 
+ [features]
++http-client-wasi = ["http-client", "dep:waki"]
+ default = []
+ 
+ ## If set, blocking implementations of the typical git transports become available in `crate::client::blocking_io`
+@@ -150,3 +151,6 @@
+ 
+ [package.metadata.docs.rs]
+ features = ["http-client-curl", "document-features", "serde"]
++
++[target.'cfg(all(target_os = "wasi", target_env = "p2"))'.dependencies]
++waki = { version = "=0.5.1", optional = true }
+diff -ruN a/gix-transport/src/client/blocking_io/connect.rs b/gix-transport/src/client/blocking_io/connect.rs
+--- a/gix-transport/src/client/blocking_io/connect.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-transport/src/client/blocking_io/connect.rs	2026-10-18 14:26:52.817273650 +0300
+@@ -66,13 +66,17 @@
+                     .or_raise(|| message("connection failed"))?
+                 })
+             }
+-            #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest")))]
++            #[cfg(not(any(feature = "http-client-curl", feature = "http-client-reqwest", feature = "http-client-wasi")))]
+             gix_url::Scheme::Https | gix_url::Scheme::Http => {
+                 bail!(
+                     "'{}' is not compiled in. Compile with the 'http-client-curl' or 'http-client-reqwest' cargo feature".unsupported(),
+                     url.scheme
+                 );
+             }
++            #[cfg(feature = "http-client-wasi")]
++            gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(
++                crate::client::blocking_io::http::connect::<crate::client::blocking_io::http::wasi::Remote>(url, options.version, options.trace),
++            ),
+             #[cfg(feature = "http-client-curl")]
+             gix_url::Scheme::Https | gix_url::Scheme::Http => Box::new(
+                 crate::client::blocking_io::http::connect::<Curl>(url, options.version, options.trace),
+diff -ruN a/gix-transport/src/client/blocking_io/http/mod.rs b/gix-transport/src/client/blocking_io/http/mod.rs
+--- a/gix-transport/src/client/blocking_io/http/mod.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-transport/src/client/blocking_io/http/mod.rs	2026-10-18 14:26:52.816945066 +0300
+@@ -37,6 +37,9 @@
+ #[cfg(feature = "http-client-reqwest")]
+ pub mod reqwest;
+ 
++#[cfg(feature = "http-client-wasi")]
++pub mod wasi;
++
+ mod traits;
+ 
+ ///
+@@ -277,7 +280,7 @@
+     }
+ }
+ 
+-#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
++#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest", feature = "http-client-wasi"))]
+ impl<H: Http + Default> Transport<H> {
+     /// Create a new instance to communicate to `url` using the given `desired_version` of the `git` protocol.
+     /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+@@ -589,7 +592,7 @@
+ 
+ /// Connect to the given `url` via HTTP/S using the `desired_version` of the `git` protocol.
+ /// If `trace` is `true`, all packetlines received or sent will be passed to the facilities of the `gix-trace` crate.
+-#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest"))]
++#[cfg(any(feature = "http-client-curl", feature = "http-client-reqwest", feature = "http-client-wasi"))]
+ pub fn connect<H: Http + Default>(url: gix_url::Url, desired_version: Protocol, trace: bool) -> Transport<H> {
+     Transport::new(url, desired_version, trace)
+ }
+diff -ruN a/gix-transport/src/client/blocking_io/http/wasi.rs b/gix-transport/src/client/blocking_io/http/wasi.rs
+--- a/gix-transport/src/client/blocking_io/http/wasi.rs	1970-01-01 03:00:00.000000000 +0300
++++ b/gix-transport/src/client/blocking_io/http/wasi.rs	2026-10-18 14:50:05.269178151 +0300
+@@ -0,0 +1,264 @@
++//! Thread-free transport over stock WASI HTTP, with a streamed response body.
++use super::{GetResponse, Http, Options, PostBodyDataKind, PostResponse};
++use gix_error::{Result, ResultExt};
++use std::{
++    any::Any,
++    io::{self, BufRead, Cursor, Read, Write},
++    sync::{Arc, Mutex},
++};
++
++#[derive(Default)]
++/// Stock WASI HTTP client without guest threads.
++pub struct Remote {
++    options: Options,
++}
++
++struct Pending {
++    request: Option<waki::RequestBuilder>,
++    upload: Vec<u8>,
++    upload_complete: bool,
++    response: Option<waki::Response>,
++}
++impl Pending {
++    fn start(&mut self) -> io::Result<()> {
++        if self.response.is_some() {
++            return Ok(());
++        }
++        if !self.upload_complete {
++            return Err(io::Error::other(
++                "POST body must be dropped before reading the response",
++            ));
++        }
++        let request = self
++            .request
++            .take()
++            .ok_or_else(|| io::Error::other("HTTP request already failed"))?;
++        let response = request
++            .body(std::mem::take(&mut self.upload))
++            .send()
++            .map_err(io::Error::other)?;
++        if response.status_code() == 401 {
++            return Err(io::Error::new(
++                io::ErrorKind::PermissionDenied,
++                "HTTP authentication required",
++            ));
++        }
++        if !(200..300).contains(&response.status_code()) {
++            return Err(io::Error::other(format!(
++                "HTTP status {} (WASI redirect handling is not implemented)",
++                response.status_code()
++            )));
++        }
++        self.response = Some(response);
++        Ok(())
++    }
++}
++
++/// Lazy response headers; reading starts the request after its body is dropped.
++pub struct Headers {
++    pending: Arc<Mutex<Pending>>,
++    bytes: Option<Cursor<Vec<u8>>>,
++}
++impl BufRead for Headers {
++    fn fill_buf(&mut self) -> io::Result<&[u8]> {
++        if self.bytes.is_none() {
++            let mut state = self
++                .pending
++                .lock()
++                .map_err(|_| io::Error::other("HTTP state poisoned"))?;
++            state.start()?;
++            let mut data = Vec::new();
++            for (name, value) in state.response.as_ref().unwrap().headers() {
++                data.extend_from_slice(name.as_str().as_bytes());
++                data.extend_from_slice(b": ");
++                data.extend_from_slice(value.as_bytes());
++                data.push(b'\n');
++            }
++            self.bytes = Some(Cursor::new(data));
++        }
++        self.bytes.as_mut().unwrap().fill_buf()
++    }
++    fn consume(&mut self, count: usize) {
++        if let Some(bytes) = &mut self.bytes {
++            bytes.consume(count);
++        }
++    }
++}
++impl Read for Headers {
++    fn read(&mut self, dest: &mut [u8]) -> io::Result<usize> {
++        let data = self.fill_buf()?;
++        let count = data.len().min(dest.len());
++        dest[..count].copy_from_slice(&data[..count]);
++        self.consume(count);
++        Ok(count)
++    }
++}
++
++/// Response reader retaining only the current 64 KiB chunk.
++pub struct ResponseBody {
++    pending: Arc<Mutex<Pending>>,
++    bytes: Cursor<Vec<u8>>,
++    done: bool,
++}
++impl BufRead for ResponseBody {
++    fn fill_buf(&mut self) -> io::Result<&[u8]> {
++        while self.bytes.position() as usize == self.bytes.get_ref().len() && !self.done {
++            let mut state = self
++                .pending
++                .lock()
++                .map_err(|_| io::Error::other("HTTP state poisoned"))?;
++            state.start()?;
++            match state
++                .response
++                .as_ref()
++                .unwrap()
++                .chunk(65536)
++                .map_err(io::Error::other)?
++            {
++                Some(chunk) => self.bytes = Cursor::new(chunk),
++                None => self.done = true,
++            }
++        }
++        self.bytes.fill_buf()
++    }
++    fn consume(&mut self, count: usize) {
++        self.bytes.consume(count);
++    }
++}
++impl Read for ResponseBody {
++    fn read(&mut self, dest: &mut [u8]) -> io::Result<usize> {
++        let data = self.fill_buf()?;
++        let count = data.len().min(dest.len());
++        dest[..count].copy_from_slice(&data[..count]);
++        self.consume(count);
++        Ok(count)
++    }
++}
++
++/// Request writer buffered up to 8 MiB; drop completes the request body.
++pub struct PostBody {
++    pending: Arc<Mutex<Pending>>,
++}
++impl Write for PostBody {
++    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
++        let mut state = self
++            .pending
++            .lock()
++            .map_err(|_| io::Error::other("HTTP state poisoned"))?;
++        if state.upload.len().saturating_add(data.len()) > 8 * 1024 * 1024 {
++            return Err(io::Error::new(
++                io::ErrorKind::InvalidInput,
++                "WASI HTTP request body exceeds 8 MiB",
++            ));
++        }
++        state.upload.extend_from_slice(data);
++        Ok(data.len())
++    }
++    fn flush(&mut self) -> io::Result<()> {
++        Ok(())
++    }
++}
++impl Drop for PostBody {
++    fn drop(&mut self) {
++        if let Ok(mut state) = self.pending.lock() {
++            state.upload_complete = true;
++        }
++    }
++}
++
++impl Remote {
++    fn request(
++        &self,
++        url: &str,
++        headers: impl IntoIterator<Item = impl AsRef<str>>,
++        post: bool,
++    ) -> Result<PostResponse<Headers, ResponseBody, PostBody>> {
++        let mut request = if post {
++            waki::Client::new().post(url)
++        } else {
++            waki::Client::new().get(url)
++        };
++        let headers: Vec<String> = headers.into_iter().map(|s| s.as_ref().to_owned()).collect();
++        for line in self.options.extra_headers.iter().chain(headers.iter()) {
++            let (name, value) = line
++                .split_once(':')
++                .ok_or_else(|| io::Error::other("invalid HTTP header"))
++                .or_error()?;
++            let name = waki::header::HeaderName::from_bytes(name.trim().as_bytes()).or_error()?;
++            request = request.header(name, value.trim().to_owned());
++        }
++        if let Some(agent) = &self.options.user_agent {
++            request = request.header("user-agent", agent.as_str());
++        }
++        if let Some(timeout) = self.options.connect_timeout {
++            request = request.connect_timeout(timeout);
++        }
++        let pending = Arc::new(Mutex::new(Pending {
++            request: Some(request),
++            upload: Vec::new(),
++            upload_complete: !post,
++            response: None,
++        }));
++        Ok(PostResponse {
++            headers: Headers {
++                pending: pending.clone(),
++                bytes: None,
++            },
++            body: ResponseBody {
++                pending: pending.clone(),
++                bytes: Cursor::new(Vec::new()),
++                done: false,
++            },
++            post_body: PostBody { pending },
++        })
++    }
++}
++impl Http for Remote {
++    type Headers = Headers;
++    type ResponseBody = ResponseBody;
++    type PostBody = PostBody;
++    fn get(
++        &mut self,
++        url: &str,
++        _base_url: &str,
++        headers: impl IntoIterator<Item = impl AsRef<str>>,
++    ) -> Result<GetResponse<Headers, ResponseBody>> {
++        self.request(url, headers, false).map(Into::into)
++    }
++    fn post(
++        &mut self,
++        url: &str,
++        _base_url: &str,
++        headers: impl IntoIterator<Item = impl AsRef<str>>,
++        _body: PostBodyDataKind,
++    ) -> Result<PostResponse<Headers, ResponseBody, PostBody>> {
++        self.request(url, headers, true)
++    }
++    fn configure(&mut self, config: &dyn Any) -> Result {
++        let Some(options) = config.downcast_ref::<Options>() else {
++            return Err(io::Error::new(
++                io::ErrorKind::Unsupported,
++                "unknown WASI HTTP configuration",
++            ))
++            .or_error();
++        };
++        if options.proxy.as_ref().is_some_and(|s| !s.is_empty())
++            || options.proxy_authenticate.is_some()
++            || options.ssl_ca_info.is_some()
++            || options.ssl_version.is_some()
++            || !options.ssl_verify
++            || options.http_version.is_some()
++            || options.backend.is_some()
++            || options.low_speed_limit_bytes_per_second != 0
++            || options.low_speed_time_seconds != 0
++        {
++            return Err(io::Error::new(
++                io::ErrorKind::Unsupported,
++                "WASI HTTP host owns TLS, proxies and protocol settings; requested client override is unsupported",
++            ))
++            .or_error();
++        }
++        self.options = options.clone();
++        Ok(())
++    }
++}
+diff -ruN a/gix-utils/src/rng.rs b/gix-utils/src/rng.rs
+--- a/gix-utils/src/rng.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-utils/src/rng.rs	2026-10-18 14:32:44.977471446 +0300
+@@ -53,6 +53,7 @@
+     use std::hash::{BuildHasher, Hash, Hasher};
+ 
+     let mut hasher = std::collections::hash_map::RandomState::new().build_hasher();
++    #[cfg(not(target_os = "wasi"))]
+     std::process::id().hash(&mut hasher);
+     std::thread::current().id().hash(&mut hasher);
+     hasher.finish()
+diff -ruN a/gix-worktree-state/Cargo.toml b/gix-worktree-state/Cargo.toml
+--- a/gix-worktree-state/Cargo.toml	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-worktree-state/Cargo.toml	2026-10-18 14:18:41.409671391 +0300
+@@ -32,7 +32,6 @@
+ gix-path = { version = "^0.14.0", path = "../gix-path" }
+ gix-filter = { version = "^0.36.0", path = "../gix-filter" }
+ 
+-io-close = "0.3.7"
+ bstr = { version = "1.12.0", default-features = false }
+ 
+ [dev-dependencies]
+@@ -49,3 +48,6 @@
+ 
+ [package.metadata.docs.rs]
+ features = ["sha1"]
++
++[target.'cfg(not(target_os = "wasi"))'.dependencies]
++io-close = "0.3.7"
+diff -ruN a/gix-worktree-state/src/checkout/entry.rs b/gix-worktree-state/src/checkout/entry.rs
+--- a/gix-worktree-state/src/checkout/entry.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/gix-worktree-state/src/checkout/entry.rs	2026-10-18 14:19:27.210918410 +0300
+@@ -12,6 +12,7 @@
+ use gix_index::{Entry, entry::Stat};
+ use gix_object::FindExt;
+ use gix_worktree::Stack;
++#[cfg(not(target_os = "wasi"))]
+ use io_close::Close;
+ 
+ pub struct Context<'a, Find> {
+@@ -174,7 +175,7 @@
+                 )
+                 .or_error()?;
+                 file.write_all(obj.data).or_error()?;
+-                file.close().or_error()?;
++                close_file(file).or_error()?;
+             }
+ 
+             entry.stat = Stat::from_fs(&gix_index::fs::Metadata::from_path_no_follow(dest).or_error()?).or_error()?;
+@@ -283,6 +284,13 @@
+     } else {
+         ExecutableBitChange::Remove
+     };
++    #[cfg(target_os = "wasi")]
++    let executable_bit_change = {
++        if needs_executable_bit {
++            return Err(std::io::Error::new(std::io::ErrorKind::Unsupported, "WASI cannot set executable permission bits"));
++        }
++        ExecutableBitChange::NoChange
++    };
+     //  not supported on windows
+     #[cfg(windows)]
+     let executable_bit_change = ExecutableBitChange::NoChange;
+@@ -330,7 +338,7 @@
+     // NOTE: we don't call `file.sync_all()` here knowing that some filesystems don't handle this well.
+     //       revisit this once there is a bug to fix.
+     entry.stat = Stat::from_fs(md).or_error()?;
+-    file.close().or_error()?;
++    close_file(file).or_error()?;
+     Ok(())
+ }
+ 
+@@ -617,3 +625,15 @@
+         super::adjust_mode_executable_bits(0o120644, true);
+     }
+ }
++
++fn close_file(file: std::fs::File) -> std::io::Result<()> {
++    #[cfg(target_os = "wasi")]
++    {
++        // WASI descriptor drop has no error result. Sync first to report pending write errors.
++        file.sync_all()?;
++        drop(file);
++        Ok(())
++    }
++    #[cfg(not(target_os = "wasi"))]
++    file.close()
++}
+diff -ruN a/src/plumbing/main.rs b/src/plumbing/main.rs
+--- a/src/plumbing/main.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/src/plumbing/main.rs	2026-10-18 14:16:13.758145537 +0300
+@@ -126,6 +126,8 @@
+     let auto_verbose = !args.no_verbose;
+ 
+     let should_interrupt = Arc::new(AtomicBool::new(false));
++    // WASI cancellation is owned by the embedding host, not POSIX signals.
++    #[cfg(not(target_os = "wasi"))]
+     #[expect(unsafe_code)]
+     unsafe {
+         // SAFETY: The closure doesn't use mutexes or memory allocation, so it should be safe to call from a signal handler.
+diff -ruN a/src/porcelain/main.rs b/src/porcelain/main.rs
+--- a/src/porcelain/main.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/src/porcelain/main.rs	2026-10-18 14:16:13.758574249 +0300
+@@ -18,6 +18,8 @@
+ pub fn main() -> Result<()> {
+     let args: Args = Args::parse_from(gix::env::args_os());
+     let should_interrupt = Arc::new(AtomicBool::new(false));
++    // WASI cancellation is owned by the embedding host, not POSIX signals.
++    #[cfg(not(target_os = "wasi"))]
+     #[expect(unsafe_code)]
+     unsafe {
+         // SAFETY: The closure doesn't use mutexes or memory allocation, so it should be safe to call from a signal handler.
+diff -ruN a/src/shared.rs b/src/shared.rs
+--- a/src/shared.rs	2026-10-08 12:31:05.000000000 +0300
++++ b/src/shared.rs	2026-10-18 14:21:25.623928699 +0300
+@@ -25,17 +25,17 @@
+     .into()
+ }
+ 
+-#[cfg(not(feature = "prodash-render-line"))]
++#[cfg(all(not(feature = "prodash-render-line"), not(feature = "pretty-cli")))]
+ pub struct LogCreator;
+ 
+-#[cfg(not(feature = "prodash-render-line"))]
++#[cfg(all(not(feature = "prodash-render-line"), not(feature = "pretty-cli")))]
+ impl LogCreator {
+     pub fn add_child(&self, name: &str) -> prodash::progress::Log {
+         prodash::progress::Log::new(name, Some(1))
+     }
+ }
+ 
+-#[cfg(not(feature = "prodash-render-line"))]
++#[cfg(all(not(feature = "prodash-render-line"), not(feature = "pretty-cli")))]
+ fn progress_tree() -> LogCreator {
+     LogCreator
+ }
+@@ -49,6 +49,7 @@
+ 
+     use crate::shared::ProgressRange;
+ 
++    #[cfg(feature = "prodash-render-line")]
+     pub fn prepare_and_run<T>(
+         name: &str,
+         verbose: bool,
+@@ -83,6 +84,17 @@
+         res
+     }
+ 
++    #[cfg(not(feature = "prodash-render-line"))]
++    pub fn prepare_and_run<T>(
++        _name: &str,
++        _verbose: bool,
++        _range: impl Into<Option<ProgressRange>>,
++        run: impl FnOnce(progress::DoOrDiscard<prodash::tree::Item>, &mut dyn std::io::Write, &mut dyn std::io::Write) -> Result<T>,
++    ) -> Result<T> {
++        crate::shared::init_env_logger();
++        run(progress::DoOrDiscard::from(None), &mut stdout().lock(), &mut stderr())
++    }
++
+     fn write_output(out: &[u8], err: &[u8], stdout: &mut dyn io::Write, stderr: &mut dyn io::Write) -> io::Result<()> {
+         let stdout_result = stdout.write_all(out);
+         let stderr_result = stderr.write_all(err);
