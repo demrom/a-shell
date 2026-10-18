@@ -19,6 +19,9 @@ nice -n 15 xcrun --sdk iphoneos clang -target arm64-apple-ios26.2 -isysroot "$sd
   -F "$(dirname "$core")" -framework ios_system -framework Security \
   -Wl,-dead_strip -Wl,-install_name,@rpath/WasmtimeCommand.framework/WasmtimeCommand \
   -Wl,-exported_symbol,_wasmtime_main -Wl,-exported_symbol,_p3contract_ios_main \
+  -Wl,-exported_symbol,_ashell_p3_new -Wl,-exported_symbol,_ashell_p3_delete -Wl,-exported_symbol,_ashell_p3_compile \
+  -Wl,-exported_symbol,_ashell_p3_artifact_status -Wl,-exported_symbol,_ashell_p3_run_trusted \
+  \
   -o "$bundle/WasmtimeCommand.new"
 xcrun strip -S -x "$bundle/WasmtimeCommand.new"
 mv "$bundle/WasmtimeCommand.new" "$bundle/WasmtimeCommand"
