@@ -4,13 +4,13 @@ This is a bounded feasibility probe, not a replacement for the installed interpr
 
 | Contract | Required boundary | Expected result | Status |
 | --- | --- | --- | --- |
-| Released guest ABI | Component inspection | stdout/types imports and run export remain `@0.3.1` | PASS: wasm-tools 1.262.0 decode, 2026-10-18; runtime not yet exercised |
+| Released guest ABI | Component inspection | stdout/types imports and run export remain `@0.3.1` | PASS: wasm-tools 1.262.0 decode and C1/C2 physical runs, 2026-10-18 |
 | First linking gate | Stock host CLI with Pulley | Exact `WASIP3_HELLO` plus LF, status 0; stop on mismatch without downgrading | PASS: stock host CLI exit 0, exact stdout, 2026-10-18 |
-| Worker hello | Real a-Shell worker command | Same exact stdout/status, main app and worker remain alive | UNVERIFIED |
-| Streamed HTTPS | Same worker, normal TLS validation | Status/body exact; first body marker arrives at least 1 s before completion of the public 3 s HTTPS drip | UNVERIFIED |
-| Cancellation/re-entry | Same worker | In-flight request stops, next hello succeeds, stdio remains usable | UNVERIFIED |
-| Worker memory | Physical device through assigned driver | Baseline/runtime/guest/TLS/cancel/repeat physical footprint and RSS receipts; proposed peak physical footprint <=28 MiB | UNVERIFIED |
-| Compiler size comparison | Two matched release builds | Linked size and installed delta with and without Cranelift; trusted artifact compatibility recorded | UNVERIFIED |
+| Worker hello | Real a-Shell worker command | Same exact stdout/status, main app and worker remain alive | PASS C1/C2: physical worker receipts below |
+| Streamed HTTPS | Same worker, normal TLS validation | Status/body exact; first body marker arrives at least 1 s before completion of the public 3 s HTTPS drip | PASS C1/C2: 2.928505/2.963553 s |
+| Cancellation/re-entry | Same worker | In-flight request stops, next hello succeeds, stdio remains usable | PASS C1/C2: independent real keyboard runs below |
+| Worker memory | Physical device through assigned driver | Baseline/runtime/guest/TLS/cancel/repeat physical footprint and RSS receipts; proposed peak physical footprint <=28 MiB | PASS C1/C2: 6,538,816/5,359,240 bytes peak physical |
+| Compiler size comparison | Two matched release builds | Linked size and installed delta with and without Cranelift; trusted artifact compatibility recorded | Signed package file totals measured for all three; installed static delta measured for C2/WasmKit only |
 | Install/rollback | Physical device through assigned driver | Owned package install and restore; preserve existing user data/session | UNVERIFIED |
 
 Raw mode, terminal size/resize, interactive Unicode/editing, child spawn and TUI behavior are outside this first skeleton. Their later contract must use an explicitly named a-Shell extension where WASI has no interface; no success stub is accepted. Background/foreground, app kill/relaunch and long-term artifact migration remain unqualified until physical-device checks are added and run. The assigned phone driver owns every phone operation.
@@ -21,12 +21,12 @@ The final report must end with GO or NO-GO and name these numbers and the corres
 
 | Number | Measurement | Evidence required | Status |
 | --- | --- | --- | --- |
-| 1 | Released WASI p3 hello and one streamed HTTPS request inside one worker | Exact stdout/status, TLS validation and first-chunk-to-completion interval >=1 s for the public 3 s HTTPS drip | UNVERIFIED |
-| 2 | Cancellation kills the guest and the worker recovers | Cancel receipt followed by successful hello in the same worker | UNVERIFIED |
-| 3 | Peak physical footprint <=28 MiB | Physical-device baseline and peak receipts across guest/TLS/cancel/repeat | UNVERIFIED |
-| 4 | Added app size with and without Cranelift versus current WasmKit | Matched linked/installed app byte counts for all three configurations | UNVERIFIED |
-| 5 | Cold start to first output | Physical-device monotonic timestamps with cold-state definition | UNVERIFIED |
-| 6 | CPU-bound Preview1 guest under WasmKit and Pulley | Identical .wasm SHA-256, exact result and elapsed times on the same phone | UNVERIFIED |
+| 1 | Released WASI p3 hello and one streamed HTTPS request inside one worker | Exact stdout/status, TLS validation and first-chunk-to-completion interval >=1 s for the public 3 s HTTPS drip | PASS: numbered physical evidence below |
+| 2 | Cancellation kills the guest and the worker recovers | Cancel receipt followed by successful hello in the same worker | PASS: numbered physical evidence below |
+| 3 | Peak physical footprint <=28 MiB | Physical-device baseline and peak receipts across guest/TLS/cancel/repeat | PASS: numbered physical evidence below |
+| 4 | Added app size with and without Cranelift versus current WasmKit | Matched linked/installed app byte counts for all three configurations | Signed package file totals measured for all three; C1 installed static usage unmeasured |
+| 5 | Cold start to first output | Physical-device monotonic timestamps with cold-state definition | PASS: numbered physical evidence below |
+| 6 | CPU-bound Preview1 guest under WasmKit and Pulley | Identical .wasm SHA-256, exact result and elapsed times on the same phone | PASS: numbered physical evidence below |
 
 ## Host evidence, 2026-10-18
 
@@ -41,7 +41,7 @@ These measurements do not qualify the phone. Both variants use the same stock Wa
 | Peak physical footprint, entire host process | 14,402,040 bytes | 4,407,776 bytes |
 | Stripped arm64 iOS framework, unsigned | 9,936,464 bytes | 5,114,232 bytes |
 
-Evidence files are `ffi-contract-c1.jsonl`, `ffi-contract-c2.jsonl`, `ios-c1-build.log`, `ios-c2-build.log`, `ios-c1-link.log` and `ios-c2-link.log` in the owned output directory. Framework bytes are measured build artifacts, not installed app deltas. The Preview1 CPU guest's 20,000,000-round checksum is `96d4bdf4`; Mac Pulley computation was approximately 0.23 s. Phone WasmKit/Pulley timing remains unverified.
+Evidence files are `ffi-contract-c1.jsonl`, `ffi-contract-c2.jsonl`, `ios-c1-build.log`, `ios-c2-build.log`, `ios-c1-link.log` and `ios-c2-link.log` in the owned output directory. Framework bytes are measured build artifacts, not installed app deltas. The Preview1 CPU guest's 20,000,000-round checksum is `96d4bdf4`; Mac Pulley computation was approximately 0.23 s. These host timings are separate from the physical comparison below.
 
 The matched upstream WasmKitCommand/WasmKit baseline also builds for arm64 iOS 26.2: stripped unsigned framework 2,595,248 bytes, source wrapper unchanged, WasmKit submodule `4972ae620e25d7eaecaf6a08248b46c50b67d750`. Its build evidence is `wasmkit-build.log`. It is absent from the current mini candidate and must be added for the physical comparison.
 
@@ -51,4 +51,29 @@ Harness defect `task-5hct`: the public service caps delay plus duration at ten s
 
 Corrected host C1/C2 contract receipts are `ffi-contract-c1-valid-cancel.jsonl` and `ffi-contract-c2-valid-cancel.jsonl`, with corresponding `.status` files requiring zero. Both pass exact hello, streamed HTTPS, cancellation of an unfinished HTTP 200 body with status 130, and exact same-runner hello recovery. The strengthened contract rejected the invalid ten-second fixture; those RED outputs are retained as `ffi-contract-c1-invalid-fixture-red.jsonl` and `ffi-contract-c2-invalid-fixture-red.jsonl`.
 
-Physical C1 evidence from the assigned driver is partial acceptance: `c1-readback/c1.jsonl` records cold C entry to first output 0.079129 s, streamed body interval 2.928505 s, and peak physical footprint 6,538,816 bytes. Its internal cancellation remains disqualified. The independent real keyboard run requires `c1-keyboard8-before-cancel.txt` showing HTTP 200 and an asterisk, then `c1-readback/c1-keyboard8.status` = 130, `c1-recovered.status` = 0 with exact hello, and `c1-ordinary.txt` = `WORKER_RECOVERED`. These files live under the driver's `pulley-190` evidence directory. C2 and the complete matched size/CPU comparison remain pending; no final phone verdict is claimed here.
+## Physical worker verdict, 2026-10-18
+
+GO for the bounded Wasmtime+Pulley runtime proof. C1 supports ordinary Wasm bytecode; C2 removes Cranelift and requires trusted matching precompiled artifacts. Use C1 when ordinary bytecode is required. C2 is suitable for controlled artifacts. This evidence does not qualify a shipping app or select the default runtime: the diagnostic packages are subsets, and WasmKit ran this Preview1 CPU guest faster.
+
+Evidence root: `/private/tmp/colors-task-79mc-352/pulley-190`. The assigned driver ran fresh HerdrWorkerB processes in pane `w1:p2`: C1 PID 82279, C2 PID 82359, corrected WasmKit PID 84043. The main app's full launch/XPC latency is excluded from the cold metric. Device deployment target was iOS 26.2; the latest same-day diagnostic headers report iPhone OS 27.0.1 (24A446), without a fresh live OS query.
+
+| Criterion | C1: Cranelift included | C2: compiler excluded | Evidence relative to root |
+| --- | --- | --- | --- |
+| 1. WASI p3 hello and streamed HTTPS | Exact hello/status 0; stream continues 2.928505 s after first marker | Exact hello/status 0; stream continues 2.963553 s | `c1-readback/c1.jsonl`, `c2-readback/c2.jsonl` |
+| 2. Cancel and worker recovery | Real Ctrl-C after HTTP 200 and body asterisk: status 130, next exact hello/status 0 and ordinary `WORKER_RECOVERED` | Same checks pass | `c1-keyboard8-timing.json`, `c2-keyboard8-timing.json`; each `c1-readback/` or `c2-readback/` contains matching `*-keyboard8.status`, `*-recovered.stdout`, `*-recovered.status`, `*-ordinary.txt` |
+| 3. Peak physical footprint <=29,360,128 bytes (28 MiB) | 6,538,816 bytes, PASS; peak RSS 32,014,336 bytes | 5,359,240 bytes, PASS; peak RSS 20,168,704 bytes | `c1-readback/c1.jsonl`, `c2-readback/c2.jsonl` |
+| 4. Added app size versus WasmKit | +7,292,094 regular-file bytes | +2,460,462 regular-file bytes | `c1-package.json`, `c2-package.json`, `wasmkit-package.json` |
+| 5. Cold C entry before engine creation to first output | 79.129 ms | 9.728 ms | `c1-readback/c1.jsonl`, `c2-readback/c2.jsonl` |
+| 6. Same Preview1 CPU workload, 20,000,000 rounds | 221.076208 ms, 1.761423 times WasmKit | 244.475750 ms, 1.947859 times WasmKit | `c1-readback/c1-cpu.txt`, `c2-readback/c2-cpu.txt`, `fixed238-results.json`, `fixed238-readback/preopen-cpu.txt` |
+
+WasmKit's CPU result is 125.510000 ms. All three results have checksum `96d4bdf4`. C1 and WasmKit execute the identical original `.wasm`, SHA-256 `f44063a3cc8deb68f7b688225ae17bb6c3b44840bd966885590785c318e9340e`; C2 executes its matching trusted precompiled equivalent. These are single guest-inner observations that exclude load/dispatch/startup, so they establish this observed cost without a statistical performance claim.
+
+Signed diagnostic package regular-file totals are C1 408,082,080 bytes, C2 403,250,448 bytes and WasmKit 400,789,986 bytes. These are package file sums, not filesystem allocation or installed usage. Installed static usage was measured for C2 (415,502,336 bytes) and WasmKit (413,057,024 bytes): delta 2,445,312 bytes. C1 installed static usage remains unmeasured. The package size receipts precede the guard/preopen corrections; the corrected WasmKit framework retains the same stripped unsigned size, 2,595,248 bytes. Rebuilt signed package totals were not remeasured. `phone-metrics.json` aggregates the measurements; raw receipts retain earlier status fields from their creation time.
+
+The corrected WasmKit comparison required the ios_system guard fix `e18f9e7fa7feccc38104f72300488acd23e3cafc` and WasmKitCommand preopen fix `f28b95d1c5877a7de2587c53054bdffd7f3ca953`. `fixed238-results.json` records exact `WASMKIT_HELLO` plus LF, status 0 and empty stderr; the CPU guest also returns 0 with empty stderr. Worker PID 84043 is unchanged before/after and the next ordinary command prints exact `WASMKIT_PREOPEN_WORKER_RECOVERED`. Both phone guest hashes were checked against the source artifacts.
+
+Cancellation qualification uses only the independent real keyboard runs with HTTP 200 and an actual body byte before Ctrl-C. The earlier internal HTTP 400 cancellation receipts remain disqualified under `task-5hct`. The 219 closure was attributed to installcoordinationd replacing the same app ID, not a Pulley crash; see `stop219-termination.txt`. The diagnostic app is still installed in the latest receipt; restoring the frozen app and qualifying its ordinary behavior belongs to the lead and assigned phone driver.
+
+The released 0.3.1 guest links against stock Wasmtime 49.0.3 p3 hosts without an ABI downgrade or Wasmtime patch. The measured runtime fits the 28 MiB physical footprint limit. The costs are the added package bytes and the observed Preview1 CPU slowdown above. Interactive terminal/child-spawn imports, full lifecycle and default-runtime selection retain their separate acceptance work.
+
+GO
