@@ -1,0 +1,25 @@
+[package]
+name = "ashell-p3-host"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[features]
+default = ["compiler"]
+compiler = ["wasmtime/cranelift"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt", "time", "net", "macros", "sync"] }
+wasmtime = { version = "=49.0.3", default-features = false, features = ["std", "runtime", "pulley", "component-model", "component-model-async"] }
+wasmtime-wasi = { version = "=49.0.3", default-features = false, features = ["p1", "p3"] }
+
+wasmparser = "=0.258.3"
+wasmtime-wasi-http = { version = "=49.0.3", default-features = false, features = ["p3", "default-send-request"] }
+
+[profile.release]
+opt-level = "s"
+panic = "abort"
+strip = "debuginfo"
