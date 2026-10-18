@@ -23,3 +23,6 @@ wasmtime-wasi-http = { version = "=49.0.3", default-features = false, features =
 opt-level = "s"
 panic = "abort"
 strip = "debuginfo"
+
+[profile.release.package.pulley-interpreter]
+opt-level = 3

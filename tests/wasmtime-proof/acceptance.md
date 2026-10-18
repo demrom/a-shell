@@ -77,3 +77,33 @@ Cancellation qualification uses only the independent real keyboard runs with HTT
 The released 0.3.1 guest links against stock Wasmtime 49.0.3 p3 hosts without an ABI downgrade or Wasmtime patch. The measured runtime fits the 28 MiB physical footprint limit. The costs are the added package bytes and the observed Preview1 CPU slowdown above. Interactive terminal/child-spawn imports, full lifecycle and default-runtime selection retain their separate acceptance work.
 
 GO
+
+## Interpreter profile experiment, 2026-10-18
+
+Keep the per-package `pulley-interpreter` release override at `opt-level = 3` for the next phone comparison. On this Mac it reduced median guest-inner CPU time by 15.006% for a 64-byte increase in the stripped arm64 iOS framework. WasmKit still has the faster Preview1 CPU median; this result does not establish an optimal runtime dispatch rule or a phone speedup.
+
+The original phone C1/C2 builds used `[profile.release] opt-level = "s"`, `panic = "abort"`, and `strip = "debuginfo"`, including Wasmtime and `pulley-interpreter`. `lto` and `codegen-units` were unset; the captured rustc commands contain neither `-C lto` nor `-C codegen-units`, and use `-C embed-bitcode=no`. The original nonverbose logs do not record numerical codegen units or an explicit LTO mode, so those are reported as unset rather than reconstructed flags. Both original Pulley fingerprints have the same profile ID `896238939589719598` and empty extra Rust flags. An offline verbose C1 replay reproduced the original phone static archive byte-for-byte, SHA-256 `8268c7eff85825a95584b83a7178401a766f19faddbdf992636c78cdc4348abd`. The override changes only the interpreter package; Wasmtime and the other target crates remain at `opt-level = "s"`. LTO, codegen units, guest code generation, features, cancellation and link inputs stay the same.
+
+Evidence root: `/private/tmp/wasmkit-task-79mc496/speed27`. `c1-ios-replay.log`, `c1-ios-opt3.log`, `c1-host-opt3.log`, `original-profile-fingerprints.json` and `profile-flags.json` record the build settings. All Cargo builds used Rust 1.96.1, locked dependencies, offline mode, nice 15 and two jobs. The device links use the same ios_system input, SDK 27.1, iOS 26.2 target, C sources, dead stripping and `strip -S -x`. The baseline was relinked with the current corrected cancellation fixture for an equal comparison: baseline 9,936,464 bytes, interpreter override 9,936,528 bytes, delta +64 bytes. The optimized framework is `ios-opt3/P3Proof.framework`; its unsigned binary SHA-256 is `413247adc4e83e51cfc0e07dc9c4d3d795e8128e6c724cb8bf78fc7b52d5d811`. This experiment used the original matched core, not the subsequent pane-guard fix; the phone driver must preserve the corrected core when packaging.
+
+Five fresh host processes per variant ran the byte-identical Preview1 CPU guest, 20,000,000 rounds, SHA-256 `f44063a3cc8deb68f7b688225ae17bb6c3b44840bd966885590785c318e9340e`. Each returned 0 with checksum `96d4bdf4`. Runs were interleaved with rotated ordering, nice 15, after builds finished; guest-inner `CPU_NS` is separate from process wall time. The host reports macOS 26.6.2 arm64. WasmKit uses the corrected real wrapper and pinned engine in Swift Release, with the host stdio/environment adapter; the earlier Swift debug build is excluded. Dependencies were already cached and package updates/prefetching were disabled.
+
+| Runtime | Median | Minimum | Maximum | Spread (max minus min) |
+| --- | --- | --- | --- | --- |
+| Current C1, interpreter opt-s | 233.969084 ms | 220.659250 ms | 273.218584 ms | 52.559334 ms |
+| C1, interpreter opt-3 only | 198.860542 ms | 196.678000 ms | 248.224500 ms | 51.546500 ms |
+| WasmKit Release | 123.041750 ms | 121.089708 ms | 179.307459 ms | 58.217751 ms |
+
+`cpu-five-runs.json` records all fifteen samples, order, process statuses, wall timings and executable hashes; individual stdout/stderr files are alongside it. All five paired C1 observations favored opt-3, but the ranges overlap. These observations support the small profile change and a phone A/B check, not a statistical or cross-device performance claim. Current and optimized C1 medians are respectively 1.901542 and 1.616204 times the WasmKit median. The earlier physical six-criterion verdict remains evidence for the original opt-s builds; the new profile has not been measured on the phone.
+
+Verified against the cached Wasmtime 49.0.3 source, the inexpensive configuration checks are:
+
+| Setting | Current behavior and next action | Source relative to cached crate |
+| --- | --- | --- |
+| `cranelift_opt_level` | Already `OptLevel::Speed`; this optimizes guest bytecode separately from Cargo's host interpreter profile. A `SpeedAndSize` comparison is cheap but has no presumed speed benefit. Changing compilation settings requires regenerating matching C2 artifacts. | `wasmtime-49.0.3/src/config.rs:1538` |
+| Register allocator | Default backtracking already targets code quality. Keep it; SinglePass targets compile speed and carries an upstream maturity warning. | `wasmtime-49.0.3/src/config.rs:1563`, `cranelift-codegen-meta-0.136.3/src/shared/settings.rs:33` |
+| `signals_based_traps` and memory guard | Pulley target defaults explicitly disable signal traps and set guards to zero. Cranelift also forbids relying on memory signals for Pulley. Enabling signals or larger guards cannot provide the native bounds-check-elision path. Keep these defaults. | `wasmtime-environ-49.0.3/src/tunables.rs:224`, `wasmtime-internal-cranelift-49.0.3/src/func_environ.rs:5906` |
+| Memory reservation/growth and COW | Cheap to vary when investigating allocation, startup or footprint. The target is 64-bit and inherits a 4 GiB virtual reservation with a zero Pulley guard. These are not a likely fix for this register arithmetic loop; virtual reservation is distinct from physical footprint. | `wasmtime-environ-49.0.3/src/tunables.rs:324`, `wasmtime-49.0.3/src/config.rs:1929`, `wasmtime-49.0.3/src/config.rs:2285` |
+| Epoch interruption | Enabled to satisfy cancellation. Disabling it is a cheap benchmark control for instrumentation cost, but fails the guest cancellation requirement and is not an adoption option without another proven mechanism. Fuel is already off. | `host/src/lib.rs:108`, `wasmtime-49.0.3/src/config.rs:627`, `wasmtime-49.0.3/src/config.rs:648` |
+
+The interpreter dispatch loop uses the stable Rust match loop in this build. Tail-call dispatch is a separate compile-time configuration, not a `Config` speed knob; it was not changed or tested here. The next measurement should be the interpreter-only opt-3 artifact against current C1 on the phone, through the lead's exclusive driver.
