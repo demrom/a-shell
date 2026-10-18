@@ -124,3 +124,17 @@ The native executable was compiled from the entire unchanged `cpu/src/main.rs` w
 Evidence root: `/private/tmp/wasmkit-task-79mc496/speed29`. `native-five-runs.json` holds all five native samples, the original interpreter rows and ratios; `native-1.stdout` through `native-5.stdout` retain raw output. The native row adds an optimized machine-code reference without changing the interpreter results or the recommendation to measure opt-3 on the phone.
 
 A separate unsigned `NativeCPU.framework` is ready for a later phone comparison: 315,904 binary bytes, SHA-256 `41b24154211aaba3f8de70e2d7b12c5936b85beb01bcd0a433db2ed5125bb1ee`, arm64 iOS 26.2, SDK 27.1, exported command `native_cpu_main`. `build-native-framework.sh`, `native-cpu.rs`, `native-entry.c`, `loop-extract.json` and `receipt.json` retain the exact sources and build recipe beside it. The Rust loop and `Instant` timer were extracted verbatim from the original source; only argument parsing and output were adapted to the C command ABI and ios_system thread streams. The same adapter linked as a host command returned exact checksum/status/streams; invalid counts and extra arguments returned 2. `file`, `vtool`, exports and dynamic dependencies were checked. This framework has not been installed or run on a phone, so no native phone timing is claimed. Packaging must preserve the corrected ios_system core; the older core used only for linking must not replace it.
+
+## Terminal bridge `ashell:tty`, host evidence 2026-10-18 (task-79mc.512)
+
+Host-only; the physical raw-mode check through ios_system is not done. Toolchain: Rust 1.96.1 from an owned rustup in `/private/tmp/wasmtime-tty-512/{rustup,cargo}` (`env.sh` there exports it), wasm-tools 1.262.0, target dir `/private/tmp/wasmtime-tty-512/target`. Commands are in `README.md`.
+
+| Check | Result |
+| --- | --- |
+| Component imports `ashell:tty/tty@0.1.0` | `wasm-tools component wit` lists it beside stdin/stdout/environment 0.3.1 |
+| RED: host at `e010fe2c` (no bridge) runs the tty component | exit 1: `component imports instance ashell:tty/tty@0.1.0, but a matching implementation was not found in the linker` |
+| GREEN: `tty-contract` against the bridge host | 6/6 pass: no bridge → status 1; `SIZE=80x24 RAW=on KEYS=1b5b41 RAW=off` exact, status 0, no read in cooked mode, no EOF sent; return with raw on, trap, Ctrl-C (130) each leave the terminal cooked |
+| Mutation: raw restore removed from the host | the return, trap and cancel checks fail; the others pass |
+| Framework size, arm64 iOS 26.2, C1, stripped unsigned `P3Proof` | 9,936,528 bytes before, 9,969,696 after: +33,168 bytes (+0.33%). Host `ashell-p3-host` on macOS: 18,214,976 → 18,267,168 (+52,192) |
+
+Open: raw mode and `ios_getWindowSize` in a real a-Shell worker. In `worker.c`, `tty_raw(1)` only calls `ios_startInteractive`, which the command already holds for the Ctrl-C watcher, so whether it yields true unbuffered input is unproven. Guest stdout still reports not-a-terminal.
