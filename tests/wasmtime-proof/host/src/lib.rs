@@ -173,6 +173,7 @@ fn wasi_builder(args: &[String], output: Output, tty: Option<Tty>) -> wasmtime_w
     let terminal = |fd| tty.is_some_and(|t| (t.isatty)(t.context, fd) != 0);
     let mut wasi = WasiCtx::builder();
     wasi.args(args)
+        .inherit_env()
         .stdout(Stream { output, number: 1, terminal: terminal(1) })
         .stderr(Stream { output, number: 2, terminal: terminal(2) });
     if let Some(tty) = tty {
@@ -260,6 +261,8 @@ impl Runner {
         self.engine.increment_epoch();
         self.wake.notify_one();
     }
+    /// Publishes the artifact with a rename, so a reader never sees a partial file,
+    /// a kill keeps the previous artifact and an old mapping stays valid.
     #[cfg(feature = "compiler")]
     pub fn precompile(&self, input: &str, output: &str) -> Result<()> {
         let bytes = std::fs::read(input)?;
@@ -268,8 +271,32 @@ impl Runner {
         } else {
             self.engine.precompile_module(&bytes)?
         };
-        std::fs::write(output, artifact)?;
-        Ok(())
+        let temp = format!("{output}.tmp-{}", std::process::id());
+        let published = std::fs::write(&temp, artifact).and_then(|()| std::fs::rename(&temp, output));
+        if published.is_err() {
+            let _ = std::fs::remove_file(&temp);
+        }
+        Ok(published?)
+    }
+    /// 0 loadable, 1 missing, 2 the engine rejects it (version, target or config
+    /// changed), 3 not a Wasmtime artifact, 4 other I/O (permissions).
+    pub fn artifact_status(&self, path: &str) -> i32 {
+        let kind = match Engine::detect_precompiled_file(path) {
+            Err(error) => {
+                return match error.downcast_ref::<std::io::Error>() {
+                    Some(io) if io.kind() == std::io::ErrorKind::NotFound => 1,
+                    Some(_) => 4,
+                    None => 3,
+                };
+            }
+            Ok(None) => return 3,
+            Ok(Some(kind)) => kind,
+        };
+        let loaded = match kind {
+            Precompiled::Module => unsafe { Module::deserialize_file(&self.engine, path) }.map(drop),
+            Precompiled::Component => unsafe { Component::deserialize_file(&self.engine, path) }.map(drop),
+        };
+        if loaded.is_ok() { 0 } else { 2 }
     }
     pub fn run(&self, path: &str, args: &[String], output: Output) -> Result<()> {
         self.run_impl(path, args, output, false)
@@ -282,21 +309,28 @@ impl Runner {
     }
     fn run_impl(&self, path: &str, args: &[String], output: Output, trusted: bool) -> Result<()> {
         self.cancelled.store(false, Ordering::SeqCst);
-        let bytes = std::fs::read(path)?;
-        let is_module = if trusted {
-            match Engine::detect_precompiled(&bytes) {
-                Some(Precompiled::Module) => true,
-                Some(Precompiled::Component) => false,
+        // A trusted artifact is mapped, not read: no 12 MB copy in the worker.
+        let (bytes, is_module) = if trusted {
+            match Engine::detect_precompiled_file(path)? {
+                Some(Precompiled::Module) => (Vec::new(), true),
+                Some(Precompiled::Component) => (Vec::new(), false),
                 _ => return Err(format_err!("not a trusted precompiled Wasmtime artifact")),
             }
         } else {
-            !wasmparser::Parser::is_component(&bytes)
+            let bytes = std::fs::read(path)?;
+            let is_module = !wasmparser::Parser::is_component(&bytes);
+            (bytes, is_module)
         };
         if is_module {
-            return self.run_p1(&bytes, args, output, trusted);
+            let module = if trusted {
+                unsafe { Module::deserialize_file(&self.engine, path) }?
+            } else {
+                self.compile_module(&bytes)?
+            };
+            return self.run_p1(module, args, output);
         }
         let component = if trusted {
-            unsafe { Component::deserialize(&self.engine, &bytes) }?
+            unsafe { Component::deserialize_file(&self.engine, path) }?
         } else {
             #[cfg(feature = "compiler")]
             {
@@ -415,21 +449,19 @@ impl Runner {
         outcome
     }
 
-    fn run_p1(&self, bytes: &[u8], args: &[String], output: Output, trusted: bool) -> Result<()> {
-        let module = if trusted {
-            unsafe { Module::deserialize(&self.engine, bytes) }?
-        } else {
-            #[cfg(feature = "compiler")]
-            {
-                Module::new(&self.engine, bytes)?
-            }
-            #[cfg(not(feature = "compiler"))]
-            {
-                return Err(format_err!(
-                    "compiler-free build requires --trusted-precompiled"
-                ));
-            }
-        };
+    fn compile_module(&self, bytes: &[u8]) -> Result<Module> {
+        #[cfg(feature = "compiler")]
+        {
+            Module::new(&self.engine, bytes)
+        }
+        #[cfg(not(feature = "compiler"))]
+        {
+            let _ = bytes;
+            Err(format_err!("compiler-free build requires --trusted-precompiled"))
+        }
+    }
+
+    fn run_p1(&self, module: Module, args: &[String], output: Output) -> Result<()> {
         let mut linker = wasmtime::Linker::new(&self.engine);
         wasmtime_wasi::p1::add_to_linker_sync(&mut linker, |ctx| ctx)?;
         let ctx = WasiCtx::builder()
@@ -493,6 +525,48 @@ pub unsafe extern "C" fn ashell_p3_set_tty(runner: *const Runner, tty: *const Tt
 pub unsafe extern "C" fn ashell_p3_delete(runner: *mut Runner) {
     if !runner.is_null() {
         drop(unsafe { Box::from_raw(runner) });
+    }
+}
+
+/// # Safety
+/// runner, both paths and the output context are valid for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ashell_p3_compile(
+    runner: *const Runner,
+    wasm: *const c_char,
+    artifact: *const c_char,
+    output: Output,
+) -> i32 {
+    #[cfg(feature = "compiler")]
+    let result = (|| -> Result<()> {
+        let runner = unsafe { runner.as_ref() }.ok_or_else(|| format_err!("null runner"))?;
+        let wasm = unsafe { CStr::from_ptr(wasm) }.to_str()?;
+        let artifact = unsafe { CStr::from_ptr(artifact) }.to_str()?;
+        runner.precompile(wasm, artifact)
+    })();
+    #[cfg(not(feature = "compiler"))]
+    let result: Result<()> = {
+        let _ = (runner, wasm, artifact);
+        Err(format_err!("this build has no compiler"))
+    };
+    match result {
+        Ok(()) => 0,
+        Err(error) => {
+            let text = format!("ashell-p3: compile: {error:#}\n");
+            (output.write)(output.context, 2, text.as_ptr(), text.len());
+            1
+        }
+    }
+}
+
+/// # Safety
+/// runner and artifact are valid for this call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ashell_p3_artifact_status(runner: *const Runner, artifact: *const c_char) -> i32 {
+    let Some(runner) = (unsafe { runner.as_ref() }) else { return 4 };
+    match unsafe { CStr::from_ptr(artifact) }.to_str() {
+        Ok(path) => runner.artifact_status(path),
+        Err(_) => 3,
     }
 }
 

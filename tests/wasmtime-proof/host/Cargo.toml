@@ -9,7 +9,7 @@ crate-type = ["rlib", "staticlib"]
 
 [features]
 default = ["compiler"]
-compiler = ["wasmtime/cranelift"]
+compiler = ["wasmtime/cranelift", "wasmtime/parallel-compilation"]
 
 [dependencies]
 tokio = { version = "1", features = ["rt", "time", "net", "macros", "sync"] }

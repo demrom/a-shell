@@ -24,6 +24,31 @@ int32_t ashell_p3_run_trusted(const AshellP3Runner *, const char *path, size_t a
     const char *const *argv, AshellP3Output output);
 void ashell_p3_cancel(const AshellP3Runner *);
 
+/* Install-time compile, for the process that has memory for it (the app, not the
+ * worker). Compiles WASM (module or component) and atomically publishes the
+ * artifact at ARTIFACT (temp file in the same directory, then rename), so a
+ * reader never sees a partial file, a kill leaves the previous artifact, and a
+ * mapping of the old artifact stays valid. Returns 0, or 1 with a message on
+ * output stream 2. The caller decides staleness from its own package metadata
+ * (a changed .wasm is not detectable from the artifact) and recompiles.
+ * Trust model: an artifact is only ever produced by this call, into a directory
+ * the caller owns; ashell_p3_run_trusted performs no validation of machine code. */
+int32_t ashell_p3_compile(const AshellP3Runner *, const char *wasm, const char *artifact,
+    AshellP3Output output);
+/* Whether ashell_p3_run_trusted can load ARTIFACT with this engine. Distinct from
+ * guest exit codes, so it cannot collide with them. Remedy: MISSING and
+ * INCOMPATIBLE (version/target/config changed) -> recompile once; CORRUPT and IO
+ * -> report, no silent retry. A truncated file whose header is intact reports
+ * INCOMPATIBLE (the engine rejects it); recompiling is the right remedy there too. */
+enum {
+    ASHELL_P3_ARTIFACT_OK = 0,
+    ASHELL_P3_ARTIFACT_MISSING = 1,
+    ASHELL_P3_ARTIFACT_INCOMPATIBLE = 2,
+    ASHELL_P3_ARTIFACT_CORRUPT = 3,
+    ASHELL_P3_ARTIFACT_IO = 4,
+};
+int32_t ashell_p3_artifact_status(const AshellP3Runner *, const char *artifact);
+
 /* Terminal bridge behind the WIT interface ashell:tty@0.1.0 (wit/ashell-tty.wit),
  * same semantics as ashell_v1 tty_size/tty_raw. Errors are negative WASI errno.
  * size writes columns and rows. raw(1) selects direct keyboard input, raw(0)
