@@ -372,6 +372,15 @@ impl Runner {
         let mut wasi = wasi_builder(args, output, tty);
         wasi.inherit_network()
             .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?;
+        // An iOS sandbox refuses to open the ancestors of the app container, which a
+        // capability lookup from "/" must do. A preopen at the container's own absolute
+        // path (the longest prefix wins in the guest) avoids opening them.
+        let mut owned = vec![std::env::var("HOME").ok(), std::env::current_dir().ok().and_then(|p| p.to_str().map(String::from))];
+        owned.retain(|p| p.as_deref().is_some_and(|p| p.starts_with('/') && p != "/"));
+        owned.dedup();
+        for dir in owned.into_iter().flatten() {
+            let _ = wasi.preopened_dir(&dir, &dir, wasmtime_wasi::FsPerms::ReadWrite);
+        }
         let mut store = Store::new(&self.engine, State {
             wasi: wasi.build(), table: ResourceTable::new(),
             http: WasiHttpCtx::new(), hooks: Hooks, tty, raw: false,
