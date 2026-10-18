@@ -64,26 +64,26 @@ nice -n 15 clang -O2 "$proof/ffi-contract.c" "$CARGO_TARGET_DIR/c2/libashell_p3_
 "$CARGO_TARGET_DIR/c2/ffi-contract" --trusted-precompiled "$CARGO_TARGET_DIR/hello.cwasm" "$CARGO_TARGET_DIR/https.cwasm" httpbingo.org
 ```
 
-For iOS, build `host` with `--lib --target aarch64-apple-ios` and `IPHONEOS_DEPLOYMENT_TARGET=26.2`, once with default features and once with `--no-default-features`. Save each archive before the second build overwrites it. Then run `link-framework.sh STATICLIB OWNED-OUTPUT IOS-SYSTEM-FRAMEWORK` for each variant. It links and strips an arm64 iOS 26.2 `P3Proof.framework`, exporting `p3proof_ios_main` and `p3contract_ios_main`. It does not sign or install. The ios_system framework is an owned copy of the phone candidate's matched core; keep its hash in the receipt. Both variants must use identical SDK, deployment target, core and link settings.
+For iOS, build `host` with `--lib --target aarch64-apple-ios` and `IPHONEOS_DEPLOYMENT_TARGET=26.2`, once with default features and once with `--no-default-features`. Save each archive before the second build overwrites it. Then run `link-framework.sh STATICLIB OWNED-OUTPUT IOS-SYSTEM-FRAMEWORK` for each variant. It links and strips an arm64 iOS 26.2 `WasmtimeCommand.framework`, exporting `wasmtime_main` and `p3contract_ios_main`. It does not sign or install. The ios_system framework is an owned copy of the phone candidate's matched core; keep its hash in the receipt. Both variants must use identical SDK, deployment target, core and link settings.
 
 ## Phone driver handoff
 
-The assigned phone driver owns packaging, signing, installing, terminal actions, readback and rollback. Add only one `P3Proof.framework` variant to the candidate's Frameworks directory at a time. Register `p3proof` as `[@rpath/P3Proof.framework/P3Proof, p3proof_ios_main, "", no]` and `p3contract` with the same framework and `p3contract_ios_main` in the host and worker command dictionaries, including the existing empty PATH lookup files. Preserve the candidate's core and command implementations. Resign the copied candidate and verify signatures/dependency closure before installing. Restart the app and use a fresh worker between variants; never load two copies under the same framework name in one process.
+The assigned phone driver owns packaging, signing, installing, terminal actions, readback and rollback. Add only one `WasmtimeCommand.framework` variant to the candidate's Frameworks directory at a time. Register `wasmtime` as `[@rpath/WasmtimeCommand.framework/WasmtimeCommand, wasmtime_main, "", no]` and `p3contract` with the same framework and `p3contract_ios_main` in the host and worker command dictionaries, including the existing empty PATH lookup files. Preserve the candidate's core and command implementations. Resign the copied candidate and verify signatures/dependency closure before installing. Restart the app and use a fresh worker between variants; never load two copies under the same framework name in one process.
 
 Transfer the hello and HTTPS components, their trusted compiled artifacts, and the single Preview1 CPU `.wasm` with hashes to one disposable phone directory. Keep the CPU `.wasm` byte-identical for WasmKit and Pulley. In a real worker, record command status and files for:
 
 ```sh
 p3contract hello.component.wasm https.component.wasm httpbingo.org > c1.jsonl 2> c1.stderr
-p3proof hello.component.wasm
-p3proof https.component.wasm httpbingo.org '/drip?duration=8&delay=0&numbytes=8&code=200'
+wasmtime hello.component.wasm
+wasmtime https.component.wasm httpbingo.org '/drip?duration=8&delay=0&numbytes=8&code=200'
 # Require HTTP_STATUS=200 and first body bytes before a real Ctrl-C; require status 130.
-p3proof hello.component.wasm
+wasmtime hello.component.wasm
 printf 'WORKER_RECOVERED\n' > recovered.txt
-p3proof ashell-cpu-proof.wasm 20000000 > pulley-cpu.txt
+wasmtime ashell-cpu-proof.wasm 20000000 > pulley-cpu.txt
 wasmkit ashell-cpu-proof.wasm 20000000 > wasmkit-cpu.txt
 ```
 
-For C2 use `p3contract --trusted-precompiled hello.cwasm https.cwasm httpbingo.org`, and `p3proof --trusted-precompiled` with the corresponding artifacts. CPU output must report rounds 20000000 and checksum `96d4bdf4`; compare `CPU_NS` on the same physical phone. Also retain outer command elapsed times. The contract's in-flight cancel and same-runner recovery supplement the real keyboard interrupt and next ordinary shell command; they do not replace those checks.
+For C2 use `p3contract --trusted-precompiled hello.cwasm https.cwasm httpbingo.org`, and `wasmtime --trusted-precompiled` with the corresponding artifacts. CPU output must report rounds 20000000 and checksum `96d4bdf4`; compare `CPU_NS` on the same physical phone. Also retain outer command elapsed times. The contract's in-flight cancel and same-runner recovery supplement the real keyboard interrupt and next ordinary shell command; they do not replace those checks.
 
 The current mini candidate has no WasmKit framework. Build the unchanged WasmKitCommand wrapper at the recorded upstream commit, with its pinned WasmKit submodule `4972ae620e25d7eaecaf6a08248b46c50b67d750`, the same matched ios_system and iOS 26.2 deployment target. Its Xcode project expects `ios_system.xcframework` at the checkout root. Use owned DerivedData/package clones, Release, `-jobs 2`, nice 15 and locked package versions. Register its stock `wasmkit` entry through `WasmKitCommand.framework` for the baseline. Do not call an unavailable-command stub a benchmark.
 
@@ -93,11 +93,15 @@ Measure regular-file bytes of each signed candidate and record installed app siz
 
 [gitoxide/README.md](gitoxide/README.md) contains the pinned wasm32-wasip2 recipe, checked CLI comparisons and cancellation contract. The C1 host now selects stock Preview2 command/HTTP interfaces for Preview2 components; existing Preview1/Preview3 paths remain available. Host command execution preserves the status exposed by WASI (the pinned Preview2 guest reduces failure to 1), and the Mac CLI routes SIGINT through the same public runner cancellation API. Phone qualification of this guest is tracked separately from the earlier Preview3 proof.
 
+## The `wasmtime` command
+
+`WasmtimeCommand.framework` exports `wasmtime_main`, registered as `wasmtime`, the way WasmKitCommand provides `wasmkit`. It takes the stock shape `wasmtime [run] [--dir HOST[::GUEST]] [--] file.wasm [args...]`; `--dir` is accepted and changes nothing because the guest already sees the whole filesystem. `-h` prints usage; the other stock subcommands (`compile`, `serve`, `explore`, `wast`, `config`, `settings`, `objdump`, `completion`, `help`) and unknown options print an error and exit 2. There is no `p3proof` alias. `--trusted-precompiled` is our addition for C2 artifacts.
+
 ## Terminal bridge: `ashell:tty`
 
 `wasi:cli` 0.3 has no raw mode and no terminal size. `wit/ashell-tty.wit` (package `ashell:tty@0.1.0`) is the one interface a guest imports on this engine, with the semantics of `ashell_v1` `tty_size`/`tty_raw`: `get-size` returns columns and rows, `set-raw` selects direct keyboard input. There is no resize event; poll `get-size`. The host restores cooked input when the guest returns, traps or is cancelled with Ctrl-C (status 130). `guest/wit/deps/ashell-tty.wit` is a symlink to the same file; the host `bindgen!` reads it from `wit/`.
 
-With the bridge set (`ashell_p3_set_tty`, or `ashell_p3_command_tty` for a command), guest stdin is the terminal: `AshellP3Tty.read` returns bytes as they arrive, so an arrow key (`ESC [ A`) reaches the guest without a newline or EOF. Without it the guest's calls fail with `unsupported` and stdin stays EOF. `worker.c` supplies it for `p3proof`: its single input watcher forwards every byte except Ctrl-C to the guest; `tty_size` is `ios_getWindowSize`. `AshellP3Tty.isatty(fd)` (`ios_isatty` in `worker.c`) decides per stream whether the guest's `wasi:cli` terminal-stdin/stdout/stderr return a handle, so TUIs that refuse a non-terminal start. Raw mode on a-Shell needs no call beyond `ios_startInteractive`, which the worker already holds (reasoning in `acceptance.md`); a physical-device check is open.
+With the bridge set (`ashell_p3_set_tty`, or `ashell_p3_command_tty` for a command), guest stdin is the terminal: `AshellP3Tty.read` returns bytes as they arrive, so an arrow key (`ESC [ A`) reaches the guest without a newline or EOF. Without it the guest's calls fail with `unsupported` and stdin stays EOF. `worker.c` supplies it for `wasmtime`: its single input watcher forwards every byte except Ctrl-C to the guest; `tty_size` is `ios_getWindowSize`. `AshellP3Tty.isatty(fd)` (`ios_isatty` in `worker.c`) decides per stream whether the guest's `wasi:cli` terminal-stdin/stdout/stderr return a handle, so TUIs that refuse a non-terminal start. Raw mode on a-Shell needs no call beyond `ios_startInteractive`, which the worker already holds (reasoning in `acceptance.md`); a physical-device check is open.
 
 Host test, red against the previous host (the component's `ashell:tty` import is unresolved) and green with the bridge. Heavy slot rules as above; `tty-contract.c` fakes only the terminal:
 

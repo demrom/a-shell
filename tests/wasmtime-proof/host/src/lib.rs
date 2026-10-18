@@ -168,6 +168,19 @@ impl AsyncRead for TtyStdin {
     }
 }
 
+/// stdout/stderr and, with a terminal bridge, stdin plus the per-stream terminal flags.
+fn wasi_builder(args: &[String], output: Output, tty: Option<Tty>) -> wasmtime_wasi::WasiCtxBuilder {
+    let terminal = |fd| tty.is_some_and(|t| (t.isatty)(t.context, fd) != 0);
+    let mut wasi = WasiCtx::builder();
+    wasi.args(args)
+        .stdout(Stream { output, number: 1, terminal: terminal(1) })
+        .stderr(Stream { output, number: 2, terminal: terminal(2) });
+    if let Some(tty) = tty {
+        wasi.stdin(TtyStdin { tty, terminal: terminal(0), shared: Arc::default() });
+    }
+    wasi
+}
+
 struct State {
     wasi: WasiCtx,
     table: ResourceTable,
@@ -306,14 +319,7 @@ impl Runner {
         wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
         ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let tty = *self.tty.lock().unwrap();
-        let mut wasi = WasiCtx::builder();
-        let terminal = |fd| tty.is_some_and(|t| (t.isatty)(t.context, fd) != 0);
-        wasi.args(args)
-            .stdout(Stream { output, number: 1, terminal: terminal(1) })
-            .stderr(Stream { output, number: 2, terminal: terminal(2) });
-        if let Some(tty) = tty {
-            wasi.stdin(TtyStdin { tty, terminal: terminal(0), shared: Arc::default() });
-        }
+        let mut wasi = wasi_builder(args, output, tty);
         let mut store = Store::new(
             &self.engine,
             State {
@@ -361,21 +367,21 @@ impl Runner {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
         wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
-        let mut wasi = WasiCtx::builder();
-        wasi.args(args)
-            .stdout(Stream { output, number: 1 })
-            .stderr(Stream { output, number: 2 })
-            .inherit_network()
+        ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
+        let tty = *self.tty.lock().unwrap();
+        let mut wasi = wasi_builder(args, output, tty);
+        wasi.inherit_network()
             .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?;
         let mut store = Store::new(&self.engine, State {
             wasi: wasi.build(), table: ResourceTable::new(),
-            http: WasiHttpCtx::new(), hooks: Hooks,
+            http: WasiHttpCtx::new(), hooks: Hooks, tty, raw: false,
         });
         store.set_epoch_deadline(1);
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(format_err!("guest cancelled"));
         }
-        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let outcome = runtime.block_on(async {
             let run = async {
                 let command = wasmtime_wasi::p2::bindings::Command::instantiate_async(&mut store, component, &linker).await?;
                 match command.wasi_cli_run().call_run(&mut store).await {
@@ -392,7 +398,12 @@ impl Runner {
                     }
                 }
             }
-        })
+        });
+        if let (true, Some(tty)) = (store.data().raw, tty) {
+            (tty.raw)(tty.context, 0);
+        }
+        runtime.shutdown_background();
+        outcome
     }
 
     fn run_p1(&self, bytes: &[u8], args: &[String], output: Output, trusted: bool) -> Result<()> {

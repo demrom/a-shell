@@ -23,20 +23,52 @@ int ashell_p3_command(int argc, const char *const *argv, FILE *out, FILE *err) {
     return ashell_p3_command_tty(argc, argv, out, err, NULL);
 }
 
+/* Stock `wasmtime [run] [--dir HOST[::GUEST]] [--] file.wasm [args...]`. The guest
+ * sees the whole filesystem already, so --dir is accepted and changes nothing.
+ * --trusted-precompiled is ours: a .cwasm from the exact trusted build (C2). */
+static const char *const other_subcommands[] = {
+    "compile", "serve", "explore", "wast", "config", "settings", "objdump", "completion", "help",
+};
+static void usage(FILE *to) {
+    fprintf(to, "usage: wasmtime [run] [--dir HOST[::GUEST]] [--] FILE.wasm [ARGS...]\n");
+}
+
 int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *tty) {
-    int trusted = argc > 1 && strcmp(argv[1], "--trusted-precompiled") == 0;
-    if (trusted) { argc--; argv++; }
-    if (argc < 2) {
-        fprintf(err, "usage: p3proof COMPONENT.wasm [GUEST-ARGS...]\n");
+    int trusted = 0, i = 1;
+    if (i < argc && strcmp(argv[i], "run") == 0) i++;
+    else if (i < argc) {
+        for (size_t n = 0; n < sizeof other_subcommands / sizeof *other_subcommands; n++) {
+            if (strcmp(argv[i], other_subcommands[n]) == 0) {
+                fprintf(err, "wasmtime: subcommand '%s' is not supported in a-Shell; only 'run' is\n", argv[i]);
+                return 2;
+            }
+        }
+    }
+    for (; i < argc && argv[i][0] == '-' && argv[i][1]; i++) {
+        const char *flag = argv[i];
+        if (strcmp(flag, "--") == 0) { i++; break; }
+        if (strcmp(flag, "-h") == 0 || strcmp(flag, "--help") == 0) { usage(out); return 0; }
+        if (strcmp(flag, "--trusted-precompiled") == 0) trusted = 1;
+        else if (strcmp(flag, "--dir") == 0 || strcmp(flag, "-d") == 0) {
+            if (++i == argc) { fprintf(err, "wasmtime: %s needs a value\n", flag); return 2; }
+        } else if (strncmp(flag, "--dir=", 6) != 0) {
+            fprintf(err, "wasmtime: option '%s' is not supported in a-Shell\n", flag);
+            return 2;
+        }
+    }
+    if (i >= argc) {
+        usage(err);
         return 2;
     }
+    argc -= i;
+    argv += i;
     AshellP3Runner *runner = ashell_p3_new();
-    if (!runner) { fprintf(err, "p3proof: engine creation failed\n"); return 1; }
+    if (!runner) { fprintf(err, "wasmtime: engine creation failed\n"); return 1; }
     pthread_mutex_lock(&active_lock);
     if (active) {
         pthread_mutex_unlock(&active_lock);
         ashell_p3_delete(runner);
-        fprintf(err, "p3proof: worker already running a guest\n");
+        fprintf(err, "wasmtime: worker already running a guest\n");
         return 1;
     }
     active = runner;
@@ -44,8 +76,8 @@ int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *er
     ashell_p3_set_tty(runner, tty);
     FILE *files[] = { out, err };
     AshellP3Output sink = { (uintptr_t)files, output };
-    int status = trusted ? ashell_p3_run_trusted(runner, argv[1], (size_t)argc - 1, argv + 1, sink)
-        : ashell_p3_run(runner, argv[1], (size_t)argc - 1, argv + 1, sink);
+    int status = trusted ? ashell_p3_run_trusted(runner, argv[0], (size_t)argc, argv, sink)
+        : ashell_p3_run(runner, argv[0], (size_t)argc, argv, sink);
     pthread_mutex_lock(&active_lock);
     active = NULL;
     pthread_mutex_unlock(&active_lock);

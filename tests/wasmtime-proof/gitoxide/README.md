@@ -68,23 +68,23 @@ Pending: the lead and .352 must run the same clone/status/log/diff/cancel/recove
 
 ## Phone driver commands
 
-Use the lead's exclusive phone window and current approved candidate. Integrate only the updated C1 P3Proof.framework, with the existing `p3proof` command dictionary/PATH entries in host and worker. Keep the corrected core and preserve the candidate's other owner changes. Follow the existing signing, single-source receipt and rollback procedure. This worker grants no phone slot and has not installed the artifact.
+Use the lead's exclusive phone window and current approved candidate. Integrate only the updated C1 WasmtimeCommand.framework, with the existing `wasmtime` command dictionary/PATH entries in host and worker. Keep the corrected core and preserve the candidate's other owner changes. Follow the existing signing, single-source receipt and rollback procedure. This worker grants no phone slot and has not installed the artifact.
 
 Transfer the exact guest and its SHA256SUMS from `/private/tmp/wasmkit-task-79mc496/pkg509-phone-inputs` to a disposable `~/Documents/herdr-pkg509` directory. Check the hash after transfer. Run the following in one real Herdr worker; record its PID before and after. Capture command status separately from stdout/stderr.
 
 ```sh
 pkg="$HOME/Documents/herdr-pkg509"
 mkdir -p "$pkg"
-p3proof "$pkg/gix.wasm" --version > "$pkg/version.out" 2> "$pkg/version.err"
-p3proof "$pkg/gix.wasm" --no-verbose --threads 1 clone https://github.com/octocat/Hello-World.git "$pkg/repo" > "$pkg/clone.out" 2> "$pkg/clone.err"
-p3proof "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" status --no-write > "$pkg/status-clean.out" 2> "$pkg/status-clean.err"
-p3proof "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" log > "$pkg/log.out" 2> "$pkg/log.err"
-p3proof "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" diff tree HEAD~1 HEAD > "$pkg/diff.out" 2> "$pkg/diff.err"
+wasmtime "$pkg/gix.wasm" --version > "$pkg/version.out" 2> "$pkg/version.err"
+wasmtime "$pkg/gix.wasm" --no-verbose --threads 1 clone https://github.com/octocat/Hello-World.git "$pkg/repo" > "$pkg/clone.out" 2> "$pkg/clone.err"
+wasmtime "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" status --no-write > "$pkg/status-clean.out" 2> "$pkg/status-clean.err"
+wasmtime "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" log > "$pkg/log.out" 2> "$pkg/log.err"
+wasmtime "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" diff tree HEAD~1 HEAD > "$pkg/diff.out" 2> "$pkg/diff.err"
 printf 'WASI comparison change\n' >> "$pkg/repo/README"
 printf 'untracked fixture\n' > "$pkg/repo/untracked.txt"
-p3proof "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" status --no-write > "$pkg/status-dirty.out" 2> "$pkg/status-dirty.err"
+wasmtime "$pkg/gix.wasm" --no-verbose --threads 1 -r "$pkg/repo" status --no-write > "$pkg/status-dirty.out" 2> "$pkg/status-dirty.err"
 ```
 
 Compare these files with the transferred host-native `expected-*.out` and `expected-*.err` files. Require status 0, exact output and unchanged worker PID. The clean status must be empty; the dirty status must list modified README and untracked.txt. The expected log and tree diff are nonempty. This is a tiny repository qualification; retain any physical memory measurement separately from file sizes.
 
-In a separate disposable destination, start the same clone invocation, send an independent real keyboard Ctrl-C while it is active, and require status 130. Run `p3proof "$pkg/gix.wasm" --version` and an ordinary command immediately afterward in the same worker, requiring status 0 and exact output. Record whether cancellation occurred during component compilation or after HTTP started; the host's delayed-HTTP test already proves cancellation while a clone request is pending. If the tiny clone completes before Ctrl-C, that attempt does not qualify; repeat with a controlled delayed clone endpoint in a lead-approved fixture window. Never count a completed clone or an HTTP error as cancellation. Route runtime defects back with exact output/status; restore the saved candidate after the proof unless the lead directs otherwise.
+In a separate disposable destination, start the same clone invocation, send an independent real keyboard Ctrl-C while it is active, and require status 130. Run `wasmtime "$pkg/gix.wasm" --version` and an ordinary command immediately afterward in the same worker, requiring status 0 and exact output. Record whether cancellation occurred during component compilation or after HTTP started; the host's delayed-HTTP test already proves cancellation while a clone request is pending. If the tiny clone completes before Ctrl-C, that attempt does not qualify; repeat with a controlled delayed clone endpoint in a lead-approved fixture window. Never count a completed clone or an HTTP error as cancellation. Route runtime defects back with exact output/status; restore the saved candidate after the proof unless the lead directs otherwise.
