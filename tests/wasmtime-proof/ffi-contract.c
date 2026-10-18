@@ -37,9 +37,9 @@ static intptr_t output(uintptr_t context, int32_t stream, const uint8_t *bytes, 
     if (!r->first && strstr(r->text, "HTTP_FIRST\n")) {
         r->first = 1;
         r->first_at = monotonic();
-        pthread_cond_signal(&r->ready);
     }
     if (strstr(r->text, "HTTP_DONE\n")) r->done_at = monotonic();
+    pthread_cond_signal(&r->ready);
     pthread_mutex_unlock(&r->lock);
     return (intptr_t)length;
 }
@@ -91,10 +91,11 @@ int ashell_p3_contract(int argc, const char *const *argv, FILE *out, FILE *err) 
     if (r.status != 0 || strcmp(r.text, "HTTP_STATUS=200\nHTTP_FIRST\n******\nHTTP_DONE\n") || r.done_at - r.first_at < 1.0) return 1;
     fprintf(out, "{\"host_https_status\":0,\"first_seconds\":%.6f,\"remaining_stream_seconds\":%.6f}\n", r.first_at-r.started, r.done_at-r.first_at);
     if (memory(out, "https")) return 1;
-    const char *cancel[] = { argv[2], argv[3], "/drip?duration=20&numbytes=20&code=200" };
+    const char *cancel[] = { argv[2], argv[3], "/drip?duration=8&delay=0&numbytes=8&code=200" };
     r.args = cancel;
     r.used = r.first = 0;
     r.text[0] = 0;
+    r.done_at = 0;
     pthread_t thread;
     if (pthread_create(&thread, NULL, run, &r)) return 1;
     pthread_mutex_lock(&r.lock);
@@ -102,13 +103,15 @@ int ashell_p3_contract(int argc, const char *const *argv, FILE *out, FILE *err) 
     clock_gettime(CLOCK_REALTIME, &deadline);
     deadline.tv_sec += 30;
     int timed_out = 0;
-    while (!r.first && !timed_out) timed_out = pthread_cond_timedwait(&r.ready, &r.lock, &deadline);
+    const char *body = "HTTP_STATUS=200\nHTTP_FIRST\n*";
+    while (strncmp(r.text, body, strlen(body)) && !r.done_at && !timed_out)
+        timed_out = pthread_cond_timedwait(&r.ready, &r.lock, &deadline);
     pthread_mutex_unlock(&r.lock);
     double cancelled = monotonic();
     ashell_p3_cancel(runner);
     pthread_join(thread, NULL);
-    if (timed_out || r.status != 130) return 1;
-    fprintf(out, "{\"cancel_status\":130,\"cancel_seconds\":%.6f}\n", monotonic()-cancelled);
+    if (timed_out || r.status != 130 || strncmp(r.text, body, strlen(body)) || r.done_at) return 1;
+    fprintf(out, "{\"cancel_status\":130,\"cancel_http_status\":200,\"cancel_body_started\":true,\"cancel_body_completed\":false,\"cancel_seconds\":%.6f}\n", monotonic()-cancelled);
     if (memory(out, "cancel")) return 1;
     r.used = 0;
     r.text[0] = 0;

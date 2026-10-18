@@ -27,6 +27,8 @@ Builds require the lead's heavy slot and more than 10 GiB free space. The phone 
 
 `ffi-contract.c` exercises the exported C ABI with real guests. It checks exact hello, an HTTPS 200 body of six asterisks, at least one second between first body output and completion of the three-second drip, cancellation returning 130, and exact hello again on the same runner. The external fixture is `httpbingo.org`; the guest sends a descriptive User-Agent and uses the stock host's public TLS roots. Request timeouts are bounded. The initial request without a User-Agent returned 402; it is not a Wasmtime defect.
 
+The cancellation request uses an eight-second drip with explicit zero delay. The service caps total delay plus duration at ten seconds; the former twenty-second request returned HTTP 400. Cancellation qualifies only after HTTP 200 and an actual body byte, with no completed-body marker. Old receipts that accepted cancellation of the error response are disqualified for cancellation; their independent hello and three-second HTTPS measurements remain valid.
+
 On Apple platforms the contract records `TASK_VM_INFO` physical footprint, ledger peak physical footprint, current RSS and peak RSS at baseline, engine creation, hello, HTTPS, cancellation and recovery. The cold hello timer starts at the C contract entry, before engine creation, and ends at the first output callback. Start a fresh worker process for a cold measurement. App launch and XPC dispatch are outside this timer and need separate driver timestamps if included in the reported result.
 
 ## Build the two runtime variants
@@ -73,8 +75,8 @@ Transfer the hello and HTTPS components, their trusted compiled artifacts, and t
 ```sh
 p3contract hello.component.wasm https.component.wasm httpbingo.org > c1.jsonl 2> c1.stderr
 p3proof hello.component.wasm
-p3proof https.component.wasm httpbingo.org '/drip?duration=20&numbytes=20&code=200'
-# Send a real Ctrl-C to this worker after HTTP_FIRST; require status 130.
+p3proof https.component.wasm httpbingo.org '/drip?duration=8&delay=0&numbytes=8&code=200'
+# Require HTTP_STATUS=200 and first body bytes before a real Ctrl-C; require status 130.
 p3proof hello.component.wasm
 printf 'WORKER_RECOVERED\n' > recovered.txt
 p3proof ashell-cpu-proof.wasm 20000000 > pulley-cpu.txt
