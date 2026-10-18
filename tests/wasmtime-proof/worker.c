@@ -88,7 +88,7 @@ static void *watch_input(void *context) {
     }
 }
 
-int p3proof_ios_main(int argc, char **argv) {
+int wasmtime_main(int argc, char **argv) {
     int stop[2];
     if (pipe(stop)) return 1;
     int previous_cancel;
