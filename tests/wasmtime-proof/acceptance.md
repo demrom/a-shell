@@ -107,3 +107,20 @@ Verified against the cached Wasmtime 49.0.3 source, the inexpensive configuratio
 | Epoch interruption | Enabled to satisfy cancellation. Disabling it is a cheap benchmark control for instrumentation cost, but fails the guest cancellation requirement and is not an adoption option without another proven mechanism. Fuel is already off. | `host/src/lib.rs:108`, `wasmtime-49.0.3/src/config.rs:627`, `wasmtime-49.0.3/src/config.rs:648` |
 
 The interpreter dispatch loop uses the stable Rust match loop in this build. Tail-call dispatch is a separate compile-time configuration, not a `Config` speed knob; it was not changed or tested here. The next measurement should be the interpreter-only opt-3 artifact against current C1 on the phone, through the lead's exclusive driver.
+
+## Native CPU reference, 2026-10-18
+
+The native host median for the same 20,000,000-round loop is 32.544000 ms. Relative to that median, WasmKit takes 3.780781 times as long, C1 with interpreter opt-3 takes 6.110513 times as long, and current C1 takes 7.189316 times as long. This measures one CPU loop; it does not predict the speed of a full native Codex build.
+
+The native executable was compiled from the entire unchanged `cpu/src/main.rs` with Rust 1.96.1 (`31fca3adb`, 2026-06-26), `rustc -C opt-level=3 cpu/src/main.rs -o cpu-native`, target `aarch64-apple-darwin`. Source SHA-256: `c01cadc5d159acfa97ce18cb0c1f8fc9aabd4118e700c67cad276c5ebe26924d`; executable SHA-256: `08928ff89126c37978d99082aaeb56246c55d59217cae5ffbf800d47c444b009`. Five fresh processes at nice 15 returned status 0, empty stderr and checksum `96d4bdf4`. Their inner `CPU_NS` values were 34122917, 31810000, 32544000, 32597583 and 31838459. These native runs followed the original interpreter measurements above; they were not interleaved with them. Process startup remains excluded, and wall times are retained separately.
+
+| Host runtime | Median | Minimum | Maximum | Median / native median |
+| --- | --- | --- | --- | --- |
+| Native Rust opt-3 | 32.544000 ms | 31.810000 ms | 34.122917 ms | 1.000000 |
+| WasmKit Release | 123.041750 ms | 121.089708 ms | 179.307459 ms | 3.780781 |
+| C1, interpreter opt-3 only | 198.860542 ms | 196.678000 ms | 248.224500 ms | 6.110513 |
+| Current C1, interpreter opt-s | 233.969084 ms | 220.659250 ms | 273.218584 ms | 7.189316 |
+
+Evidence root: `/private/tmp/wasmkit-task-79mc496/speed29`. `native-five-runs.json` holds all five native samples, the original interpreter rows and ratios; `native-1.stdout` through `native-5.stdout` retain raw output. The native row adds an optimized machine-code reference without changing the interpreter results or the recommendation to measure opt-3 on the phone.
+
+A separate unsigned `NativeCPU.framework` is ready for a later phone comparison: 315,904 binary bytes, SHA-256 `41b24154211aaba3f8de70e2d7b12c5936b85beb01bcd0a433db2ed5125bb1ee`, arm64 iOS 26.2, SDK 27.1, exported command `native_cpu_main`. `build-native-framework.sh`, `native-cpu.rs`, `native-entry.c`, `loop-extract.json` and `receipt.json` retain the exact sources and build recipe beside it. The Rust loop and `Instant` timer were extracted verbatim from the original source; only argument parsing and output were adapted to the C command ABI and ios_system thread streams. The same adapter linked as a host command returned exact checksum/status/streams; invalid counts and extra arguments returned 2. `file`, `vtool`, exports and dynamic dependencies were checked. This framework has not been installed or run on a phone, so no native phone timing is claimed. Packaging must preserve the corrected ios_system core; the older core used only for linking must not replace it.
