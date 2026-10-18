@@ -1,0 +1,20 @@
+[
+  {
+    "artifact": "wasi",
+    "bytes": 5377734,
+    "gzip9_bytes": 2026315,
+    "sha256": "d91bad49a819dbeaf9e05eb8e36314035372578526595d035c62de7867b8a9fa"
+  },
+  {
+    "artifact": "native",
+    "bytes": 6874592,
+    "gzip9_bytes": 3899610,
+    "sha256": "83c565b998a76cc0fecf50fd06d5860c83ebcbbe96e3fcbe00590818a6929ddf"
+  },
+  {
+    "artifact": "ios-c1-runtime",
+    "bytes": 11665968,
+    "gzip9_bytes": 4083015,
+    "sha256": "51041c7207e5d9501a58fab1c425a9adcb9bbd59b02aa7bf4b141f60ba0f3fc0"
+  }
+]

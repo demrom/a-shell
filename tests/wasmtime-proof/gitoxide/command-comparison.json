@@ -1,0 +1,58 @@
+[
+  {
+    "engine": "native",
+    "command": "status-clean",
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "engine": "wasi",
+    "command": "status-clean",
+    "status": 0,
+    "stdout": "",
+    "stderr": ""
+  },
+  {
+    "engine": "native",
+    "command": "log",
+    "status": 0,
+    "stdout": "7fd1a60b Merge pull request #6 from Spaceghost/patch-1\n76294131 New line at end of file. --Signed off by Spaceghost\n553c2077 first commit\n",
+    "stderr": ""
+  },
+  {
+    "engine": "wasi",
+    "command": "log",
+    "status": 0,
+    "stdout": "7fd1a60b Merge pull request #6 from Spaceghost/patch-1\n76294131 New line at end of file. --Signed off by Spaceghost\n553c2077 first commit\n",
+    "stderr": ""
+  },
+  {
+    "engine": "native",
+    "command": "diff",
+    "status": 0,
+    "stdout": "Diffing trees `HEAD~1` (553c2077f0edc3d5dc5d17262f6aa498e69d6f8e) -> `HEAD` (7fd1a60b01f91b314f59955a4e4d4e80d8edf11d)\n\nM: README\n  c57eff5 -> 980a0d5\n",
+    "stderr": ""
+  },
+  {
+    "engine": "wasi",
+    "command": "diff",
+    "status": 0,
+    "stdout": "Diffing trees `HEAD~1` (553c2077f0edc3d5dc5d17262f6aa498e69d6f8e) -> `HEAD` (7fd1a60b01f91b314f59955a4e4d4e80d8edf11d)\n\nM: README\n  c57eff5 -> 980a0d5\n",
+    "stderr": ""
+  },
+  {
+    "engine": "native",
+    "command": "status-dirty",
+    "status": 0,
+    "stdout": "  M README\n  ? untracked.txt\n",
+    "stderr": ""
+  },
+  {
+    "engine": "wasi",
+    "command": "status-dirty",
+    "status": 0,
+    "stdout": "  M README\n  ? untracked.txt\n",
+    "stderr": ""
+  }
+]

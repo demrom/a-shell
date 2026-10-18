@@ -166,6 +166,11 @@ impl Runner {
                 ));
             }
         };
+        if component.component_type().exports(&self.engine)
+            .any(|(name, _)| name.starts_with("wasi:cli/run@0.2."))
+        {
+            return self.run_p2(&component, args, output);
+        }
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p3::add_to_linker(&mut linker)?;
         wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
@@ -193,6 +198,44 @@ impl Runner {
                 store.run_concurrent(async move |store| command.wasi_cli_run().call_run(store).await)
                     .await.context("schedule guest")?.context("guest trapped")?
                     .map_err(|()| format_err!("guest returned failure"))
+            };
+            tokio::pin!(run);
+            loop {
+                tokio::select! {
+                    result = &mut run => return result,
+                    _ = self.wake.notified() => {
+                        if self.cancelled.load(Ordering::SeqCst) { return Err(format_err!("guest cancelled")); }
+                    }
+                }
+            }
+        })
+    }
+
+    fn run_p2(&self, component: &Component, args: &[String], output: Output) -> Result<()> {
+        let mut linker = Linker::new(&self.engine);
+        wasmtime_wasi::p2::add_to_linker_async(&mut linker)?;
+        wasmtime_wasi_http::p2::add_only_http_to_linker_async(&mut linker)?;
+        let mut wasi = WasiCtx::builder();
+        wasi.args(args)
+            .stdout(Stream { output, number: 1 })
+            .stderr(Stream { output, number: 2 })
+            .inherit_network()
+            .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?;
+        let mut store = Store::new(&self.engine, State {
+            wasi: wasi.build(), table: ResourceTable::new(),
+            http: WasiHttpCtx::new(), hooks: Hooks,
+        });
+        store.set_epoch_deadline(1);
+        if self.cancelled.load(Ordering::SeqCst) {
+            return Err(format_err!("guest cancelled"));
+        }
+        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+            let run = async {
+                let command = wasmtime_wasi::p2::bindings::Command::instantiate_async(&mut store, component, &linker).await?;
+                match command.wasi_cli_run().call_run(&mut store).await {
+                    Err(error) if error.downcast_ref::<wasmtime_wasi::I32Exit>().is_some_and(|exit| exit.0 == 0) => Ok(()),
+                    result => result?.map_err(|()| format_err!("guest returned failure")),
+                }
             };
             tokio::pin!(run);
             loop {
@@ -322,6 +365,9 @@ unsafe fn run_ffi(
     })();
     match result {
         Ok(()) => 0,
+        Err(error) if error.downcast_ref::<wasmtime_wasi::I32Exit>().is_some() => {
+            error.downcast_ref::<wasmtime_wasi::I32Exit>().unwrap().0
+        }
         Err(error) => {
             let text = format!("ashell-p3: {error:#}\n");
             (output.write)(output.context, 2, text.as_ptr(), text.len());

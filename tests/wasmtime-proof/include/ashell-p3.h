@@ -13,7 +13,8 @@ typedef struct {
 /* One runner per worker. run/delete are exclusive; cancel may run concurrently.
  * Caller keeps runner, argv and output context alive until run/cancel return.
  * Callback writes must be thread-safe. stdin is EOF for this bounded proof.
- * run returns 0, 1 on failure, or 130 after cancellation. */
+ * run preserves the status exposed by WASI (Preview2 may reduce failure to 1),
+ * returns 1 on host failure, or 130 after cancellation. */
 AshellP3Runner *ashell_p3_new(void);
 int32_t ashell_p3_run(const AshellP3Runner *, const char *path, size_t argc,
     const char *const *argv, AshellP3Output output);
