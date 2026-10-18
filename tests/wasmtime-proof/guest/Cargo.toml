@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [features]
 https = []
+tty = []
 
 [dependencies]
 wit-bindgen = { version = "=0.61.1", features = ["async-spawn", "inter-task-wakeup"] }

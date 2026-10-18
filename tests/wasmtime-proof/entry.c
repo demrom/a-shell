@@ -20,6 +20,10 @@ void ashell_p3_interrupt(void) {
 }
 
 int ashell_p3_command(int argc, const char *const *argv, FILE *out, FILE *err) {
+    return ashell_p3_command_tty(argc, argv, out, err, NULL);
+}
+
+int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *tty) {
     int trusted = argc > 1 && strcmp(argv[1], "--trusted-precompiled") == 0;
     if (trusted) { argc--; argv++; }
     if (argc < 2) {
@@ -37,6 +41,7 @@ int ashell_p3_command(int argc, const char *const *argv, FILE *out, FILE *err) {
     }
     active = runner;
     pthread_mutex_unlock(&active_lock);
+    ashell_p3_set_tty(runner, tty);
     FILE *files[] = { out, err };
     AshellP3Output sink = { (uintptr_t)files, output };
     int status = trusted ? ashell_p3_run_trusted(runner, argv[1], (size_t)argc - 1, argv + 1, sink)

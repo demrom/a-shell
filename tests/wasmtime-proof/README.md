@@ -92,3 +92,21 @@ Measure regular-file bytes of each signed candidate and record installed app siz
 ## Preview2 gitoxide pkg experiment
 
 [gitoxide/README.md](gitoxide/README.md) contains the pinned wasm32-wasip2 recipe, checked CLI comparisons and cancellation contract. The C1 host now selects stock Preview2 command/HTTP interfaces for Preview2 components; existing Preview1/Preview3 paths remain available. Host command execution preserves the status exposed by WASI (the pinned Preview2 guest reduces failure to 1), and the Mac CLI routes SIGINT through the same public runner cancellation API. Phone qualification of this guest is tracked separately from the earlier Preview3 proof.
+
+## Terminal bridge: `ashell:tty`
+
+`wasi:cli` 0.3 has no raw mode and no terminal size. `wit/ashell-tty.wit` (package `ashell:tty@0.1.0`) is the one interface a guest imports on this engine, with the semantics of `ashell_v1` `tty_size`/`tty_raw`: `get-size` returns columns and rows, `set-raw` selects direct keyboard input. There is no resize event; poll `get-size`. The host restores cooked input when the guest returns, traps or is cancelled with Ctrl-C (status 130). `guest/wit/deps/ashell-tty.wit` is a symlink to the same file; the host `bindgen!` reads it from `wit/`.
+
+With the bridge set (`ashell_p3_set_tty`, or `ashell_p3_command_tty` for a command), guest stdin is the terminal: `AshellP3Tty.read` returns bytes as they arrive, so an arrow key (`ESC [ A`) reaches the guest without a newline or EOF. Without it the guest's calls fail with `unsupported` and stdin stays EOF. `worker.c` supplies it for `p3proof`: its single input watcher forwards every byte except Ctrl-C to the guest; `tty_size` is `ios_getWindowSize`. Raw mode on a-Shell is not exercised by the host test; a physical-device check is open (see `acceptance.md`).
+
+Host test, red against the previous host (the component's `ashell:tty` import is unresolved) and green with the bridge. Heavy slot rules as above; `tty-contract.c` fakes only the terminal:
+
+```sh
+nice -n 15 cargo build --manifest-path "$proof/guest/Cargo.toml" --locked --release --target wasm32-unknown-unknown --features tty -j 2
+wasm-tools component new "$CARGO_TARGET_DIR/wasm32-unknown-unknown/release/ashell_p3_hello.wasm" -o "$CARGO_TARGET_DIR/tty.component.wasm"
+nice -n 15 cargo build --manifest-path "$proof/host/Cargo.toml" --locked --release -j 2
+nice -n 15 clang -O2 -Wall -Wextra "$proof/tty-contract.c" "$CARGO_TARGET_DIR/release/libashell_p3_host.a" -framework Security -framework SystemConfiguration -o "$CARGO_TARGET_DIR/tty-contract"
+"$CARGO_TARGET_DIR/tty-contract" "$CARGO_TARGET_DIR/tty.component.wasm"
+```
+
+The guest is a WASI 0.3.1 component like the other proof guests, not `wasm32-wasip2`: the host links p3 interfaces only, and a `wasm32-wasip2` std binary imports 0.2 interfaces it would not resolve.
