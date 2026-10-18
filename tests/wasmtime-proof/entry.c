@@ -69,6 +69,10 @@ static int compile_command(int argc, const char *const *argv, FILE *out, FILE *e
 }
 
 int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *tty) {
+    return ashell_p3_command_env(argc, argv, out, err, tty, NULL);
+}
+
+int ashell_p3_command_env(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *tty, const char *const *envp) {
     int trusted = 0, i = 1;
     if (i < argc && strcmp(argv[i], "compile") == 0) return compile_command(argc, argv, out, err);
     if (i < argc && strcmp(argv[i], "run") == 0) i++;
@@ -110,6 +114,7 @@ int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *er
     active = runner;
     pthread_mutex_unlock(&active_lock);
     ashell_p3_set_tty(runner, tty);
+    ashell_p3_set_env(runner, envp);
     FILE *files[] = { out, err };
     AshellP3Output sink = { (uintptr_t)files, output };
     int status = trusted ? ashell_p3_run_trusted(runner, argv[0], (size_t)argc, argv, sink)

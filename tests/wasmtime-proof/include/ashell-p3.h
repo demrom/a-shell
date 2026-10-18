@@ -69,6 +69,11 @@ typedef struct {
 /* NULL withdraws the bridge. Without it a guest importing ashell:tty gets
  * error-code unsupported and stdin stays EOF. Set it between runs. */
 void ashell_p3_set_tty(const AshellP3Runner *, const AshellP3Tty *);
+/* Guest environment for later runs: a NULL-terminated array of "NAME=value" strings,
+ * copied. a-Shell keeps `export`ed variables in ios_system, not in the process
+ * environ, so the worker hands over environmentVariables(ios_currentPid()).
+ * NULL (the default) makes the guest inherit the process environment. */
+void ashell_p3_set_env(const AshellP3Runner *, const char *const *envp);
 void ashell_p3_delete(AshellP3Runner *);
 
 /* Portable command entry; a-Shell passes thread_stdout/thread_stderr here.
@@ -78,5 +83,7 @@ int ashell_p3_command(int argc, const char *const *argv, FILE *out, FILE *err);
 /* Same, with the terminal bridge for the duration of the command; NULL is the
  * plain command. */
 int ashell_p3_command_tty(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *);
+/* Same, with the guest environment (see ashell_p3_set_env); NULL inherits the process one. */
+int ashell_p3_command_env(int argc, const char *const *argv, FILE *out, FILE *err, const AshellP3Tty *, const char *const *envp);
 void ashell_p3_interrupt(void);
 #endif
