@@ -29,11 +29,12 @@ pub struct Output {
 struct Stream {
     output: Output,
     number: i32,
+    terminal: bool,
 }
 
 impl IsTerminal for Stream {
     fn is_terminal(&self) -> bool {
-        false
+        self.terminal
     }
 }
 
@@ -89,6 +90,7 @@ pub struct Tty {
     pub size: extern "C" fn(usize, *mut u32, *mut u32) -> i32,
     pub raw: extern "C" fn(usize, i32) -> i32,
     pub read: extern "C" fn(usize, *mut u8, usize) -> isize,
+    pub isatty: extern "C" fn(usize, i32) -> i32,
 }
 
 const WASI_ENOSYS: i32 = 52;
@@ -107,6 +109,7 @@ fn error_code(status: i32) -> ErrorCode {
 #[derive(Clone)]
 struct TtyStdin {
     tty: Tty,
+    terminal: bool,
     shared: Arc<Mutex<Pending>>,
 }
 #[derive(Default)]
@@ -117,7 +120,7 @@ struct Pending {
 
 impl IsTerminal for TtyStdin {
     fn is_terminal(&self) -> bool {
-        true
+        self.terminal
     }
 }
 impl StdinStream for TtyStdin {
@@ -304,11 +307,12 @@ impl Runner {
         ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let tty = *self.tty.lock().unwrap();
         let mut wasi = WasiCtx::builder();
+        let terminal = |fd| tty.is_some_and(|t| (t.isatty)(t.context, fd) != 0);
         wasi.args(args)
-            .stdout(Stream { output, number: 1 })
-            .stderr(Stream { output, number: 2 });
+            .stdout(Stream { output, number: 1, terminal: terminal(1) })
+            .stderr(Stream { output, number: 2, terminal: terminal(2) });
         if let Some(tty) = tty {
-            wasi.stdin(TtyStdin { tty, shared: Arc::default() });
+            wasi.stdin(TtyStdin { tty, terminal: terminal(0), shared: Arc::default() });
         }
         let mut store = Store::new(
             &self.engine,
@@ -411,8 +415,8 @@ impl Runner {
         let ctx = WasiCtx::builder()
             .args(args)
             .allow_blocking_current_thread(true)
-            .stdout(Stream { output, number: 1 })
-            .stderr(Stream { output, number: 2 })
+            .stdout(Stream { output, number: 1, terminal: false })
+            .stderr(Stream { output, number: 2, terminal: false })
             .build_p1();
         let mut store = Store::new(&self.engine, ctx);
         store.set_epoch_deadline(1);
