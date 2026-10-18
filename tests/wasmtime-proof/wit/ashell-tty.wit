@@ -1,0 +1,31 @@
+/// a-Shell terminal bridge. `wasi:cli` 0.3 has neither raw mode nor terminal size.
+/// Same semantics as the `ashell_v1` imports `tty_size` and `tty_raw`.
+package ashell:tty@0.1.0;
+
+interface tty {
+    enum error-code {
+        /// No terminal is attached (ENOTTY).
+        not-a-terminal,
+        /// The embedding provides no bridge (ENOSYS, ENOTSUP).
+        unsupported,
+        /// Any other failure.
+        io,
+    }
+
+    record size {
+        columns: u32,
+        rows: u32,
+    }
+
+    /// Current size in character cells. There is no resize event: poll.
+    get-size: func() -> result<size, error-code>;
+
+    /// true: keystrokes reach `wasi:cli/stdin` as typed, unbuffered.
+    /// false: the shell's normal line input. The host restores false when the
+    /// guest returns, traps or is interrupted by Ctrl-C.
+    set-raw: func(enabled: bool) -> result<_, error-code>;
+}
+
+world terminal {
+    import tty;
+}

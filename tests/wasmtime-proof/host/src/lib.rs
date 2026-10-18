@@ -2,14 +2,16 @@ use std::ffi::{CStr, c_char};
 use std::io;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
-use tokio::io::AsyncWrite;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::task::JoinHandle;
 use tokio::sync::Notify;
 use wasmtime::component::{Component, Linker, ResourceTable};
 use wasmtime::{
     Config, Engine, Module, Precompiled, Result, Store, error::Context as _, format_err,
 };
-use wasmtime_wasi::cli::{IsTerminal, StdoutStream};
+use wasmtime_wasi::cli::{IsTerminal, StdinStream, StdoutStream};
 use wasmtime_wasi::p3::bindings::Command;
 use wasmtime_wasi::{WasiCtx, WasiCtxView, WasiView};
 use wasmtime_wasi_http::{WasiHttpCtx, WasiHttpCtxView, WasiHttpHooks, WasiHttpView};
@@ -67,11 +69,129 @@ impl AsyncWrite for Stream {
     }
 }
 
+wasmtime::component::bindgen!({
+    path: "../wit/ashell-tty.wit",
+    world: "ashell:tty/terminal",
+});
+use ashell::tty::tty::{ErrorCode, Size};
+
+/// The a-Shell terminal behind `ashell:tty`. Same semantics as the ashell_v1
+/// tty_size/tty_raw imports; errors are negative WASI errno values. Callbacks
+/// run on host threads and must be thread-safe. `read` blocks until at least
+/// one byte is available and returns it unbuffered: bytes read, 0 at EOF, -1 on
+/// error. It must return once the terminal is gone: a read in flight when a
+/// guest is cancelled is abandoned, not joined. No callback is retained after
+/// the context is released by the caller.
+#[derive(Clone, Copy)]
+#[repr(C)]
+pub struct Tty {
+    pub context: usize,
+    pub size: extern "C" fn(usize, *mut u32, *mut u32) -> i32,
+    pub raw: extern "C" fn(usize, i32) -> i32,
+    pub read: extern "C" fn(usize, *mut u8, usize) -> isize,
+}
+
+const WASI_ENOSYS: i32 = 52;
+const WASI_ENOTSUP: i32 = 58;
+const WASI_ENOTTY: i32 = 59;
+
+fn error_code(status: i32) -> ErrorCode {
+    match -status {
+        WASI_ENOTTY => ErrorCode::NotATerminal,
+        WASI_ENOSYS | WASI_ENOTSUP => ErrorCode::Unsupported,
+        _ => ErrorCode::Io,
+    }
+}
+
+/// Guest stdin fed by Tty::read. Clones share one pending read, as stdin must.
+#[derive(Clone)]
+struct TtyStdin {
+    tty: Tty,
+    shared: Arc<Mutex<Pending>>,
+}
+#[derive(Default)]
+struct Pending {
+    ready: Vec<u8>,
+    job: Option<JoinHandle<io::Result<Vec<u8>>>>,
+}
+
+impl IsTerminal for TtyStdin {
+    fn is_terminal(&self) -> bool {
+        true
+    }
+}
+impl StdinStream for TtyStdin {
+    fn async_stream(&self) -> Box<dyn AsyncRead + Send + Sync> {
+        Box::new(self.clone())
+    }
+}
+impl AsyncRead for TtyStdin {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        out: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let mut pending = self.shared.lock().unwrap();
+        loop {
+            if !pending.ready.is_empty() {
+                let n = pending.ready.len().min(out.remaining());
+                out.put_slice(&pending.ready[..n]);
+                pending.ready.drain(..n);
+                return Poll::Ready(Ok(()));
+            }
+            let tty = self.tty;
+            let job = pending.job.get_or_insert_with(|| {
+                tokio::task::spawn_blocking(move || {
+                    let mut buffer = [0u8; 256];
+                    let n = (tty.read)(tty.context, buffer.as_mut_ptr(), buffer.len());
+                    if n < 0 {
+                        Err(io::Error::other("host terminal read failed"))
+                    } else {
+                        Ok(buffer[..n as usize].to_vec())
+                    }
+                })
+            });
+            let result = match Pin::new(job).poll(cx) {
+                Poll::Pending => return Poll::Pending,
+                Poll::Ready(result) => result,
+            };
+            pending.job = None;
+            let bytes = result.map_err(io::Error::other)??;
+            if bytes.is_empty() {
+                return Poll::Ready(Ok(()));
+            }
+            pending.ready = bytes;
+        }
+    }
+}
+
 struct State {
     wasi: WasiCtx,
     table: ResourceTable,
     http: WasiHttpCtx,
     hooks: Hooks,
+    tty: Option<Tty>,
+    raw: bool,
+}
+impl ashell::tty::tty::Host for State {
+    fn get_size(&mut self) -> Result<Size, ErrorCode> {
+        let tty = self.tty.ok_or(ErrorCode::Unsupported)?;
+        let (mut columns, mut rows) = (0, 0);
+        match (tty.size)(tty.context, &mut columns, &mut rows) {
+            0 => Ok(Size { columns, rows }),
+            status => Err(error_code(status)),
+        }
+    }
+    fn set_raw(&mut self, enabled: bool) -> Result<(), ErrorCode> {
+        let tty = self.tty.ok_or(ErrorCode::Unsupported)?;
+        match (tty.raw)(tty.context, enabled as i32) {
+            0 => {
+                self.raw = enabled;
+                Ok(())
+            }
+            status => Err(error_code(status)),
+        }
+    }
 }
 struct Hooks;
 impl WasiHttpHooks for Hooks {}
@@ -99,6 +219,7 @@ pub struct Runner {
     engine: Engine,
     cancelled: AtomicBool,
     wake: Notify,
+    tty: Mutex<Option<Tty>>,
 }
 impl Runner {
     pub fn new() -> Result<Self> {
@@ -110,7 +231,13 @@ impl Runner {
             engine: Engine::new(&config)?,
             cancelled: AtomicBool::new(false),
             wake: Notify::new(),
+            tty: Mutex::new(None),
         })
+    }
+    /// Offer the terminal bridge to later runs; None withdraws it. A guest that
+    /// imports ashell:tty then sees get-size/set-raw fail with unsupported.
+    pub fn set_tty(&self, tty: Option<Tty>) {
+        *self.tty.lock().unwrap() = tty;
     }
     pub fn cancel(&self) {
         self.cancelled.store(true, Ordering::SeqCst);
@@ -174,24 +301,32 @@ impl Runner {
         let mut linker = Linker::new(&self.engine);
         wasmtime_wasi::p3::add_to_linker(&mut linker)?;
         wasmtime_wasi_http::p3::add_to_linker(&mut linker)?;
+        ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
+        let tty = *self.tty.lock().unwrap();
+        let mut wasi = WasiCtx::builder();
+        wasi.args(args)
+            .stdout(Stream { output, number: 1 })
+            .stderr(Stream { output, number: 2 });
+        if let Some(tty) = tty {
+            wasi.stdin(TtyStdin { tty, shared: Arc::default() });
+        }
         let mut store = Store::new(
             &self.engine,
             State {
-                wasi: WasiCtx::builder()
-                    .args(args)
-                    .stdout(Stream { output, number: 1 })
-                    .stderr(Stream { output, number: 2 })
-                    .build(),
+                wasi: wasi.build(),
                 table: ResourceTable::new(),
                 http: WasiHttpCtx::new(),
                 hooks: Hooks,
+                tty,
+                raw: false,
             },
         );
         store.set_epoch_deadline(1);
         if self.cancelled.load(Ordering::SeqCst) {
             return Err(format_err!("guest cancelled"));
         }
-        tokio::runtime::Builder::new_current_thread().enable_all().build()?.block_on(async {
+        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build()?;
+        let outcome = runtime.block_on(async {
             let run = async {
                 let command = Command::instantiate_async(&mut store, &component, &linker)
                     .await.context("instantiate released 0.3.1 guest with stock hosts")?;
@@ -208,7 +343,14 @@ impl Runner {
                     }
                 }
             }
-        })
+        });
+        // Every exit path ends here: return, trap and cancellation. A terminal
+        // read still blocked in the host is abandoned with the runtime.
+        if let (true, Some(tty)) = (store.data().raw, tty) {
+            (tty.raw)(tty.context, 0);
+        }
+        runtime.shutdown_background();
+        outcome
     }
 
     fn run_p2(&self, component: &Component, args: &[String], output: Output) -> Result<()> {
@@ -306,6 +448,18 @@ pub extern "C" fn ashell_p3_new() -> *mut Runner {
 pub unsafe extern "C" fn ashell_p3_cancel(runner: *const Runner) {
     if let Some(runner) = unsafe { runner.as_ref() } {
         runner.cancel();
+    }
+}
+
+/// Offers the terminal bridge to later runs of this runner; null withdraws it.
+/// Without it a guest importing ashell:tty gets error-code unsupported.
+/// # Safety
+/// runner is live; tty is null or points to a valid Tty whose context outlives
+/// every run that may use it.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ashell_p3_set_tty(runner: *const Runner, tty: *const Tty) {
+    if let Some(runner) = unsafe { runner.as_ref() } {
+        runner.set_tty(unsafe { tty.as_ref() }.copied());
     }
 }
 

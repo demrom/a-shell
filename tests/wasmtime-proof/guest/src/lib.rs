@@ -1,4 +1,4 @@
-#[cfg(not(feature = "https"))]
+#[cfg(not(any(feature = "https", feature = "tty")))]
 wit_bindgen::generate!({
     path: "wit",
     world: "hello",
@@ -7,6 +7,9 @@ wit_bindgen::generate!({
 
 #[cfg(feature = "https")]
 wit_bindgen::generate!({ path: "wit", world: "https", generate_all });
+
+#[cfg(feature = "tty")]
+wit_bindgen::generate!({ path: "wit", world: "tty", generate_all });
 
 struct Hello;
 export!(Hello);
@@ -17,7 +20,11 @@ impl exports::wasi::cli::run::Guest for Hello {
         {
             return https().await;
         }
-        #[cfg(not(feature = "https"))]
+        #[cfg(feature = "tty")]
+        {
+            return tty().await;
+        }
+        #[cfg(not(any(feature = "https", feature = "tty")))]
         hello().await
     }
 }
@@ -38,7 +45,7 @@ async fn write(bytes: Vec<u8>) -> Result<(), ()> {
     result.map_err(|_| ())
 }
 
-#[cfg(not(feature = "https"))]
+#[cfg(not(any(feature = "https", feature = "tty")))]
 async fn hello() -> Result<(), ()> {
     write(b"WASIP3_HELLO\n".to_vec()).await
 }
@@ -113,4 +120,37 @@ async fn https() -> Result<(), ()> {
     );
     sent?;
     received
+}
+
+/// Argument 1 selects how the guest leaves raw mode: "key" (default) reads an arrow
+/// key and disables it, "leave" returns with it on, "trap" traps with it on.
+/// "key" without input blocks in the read until the host cancels.
+#[cfg(feature = "tty")]
+async fn tty() -> Result<(), ()> {
+    use ashell::tty::tty::{get_size, set_raw};
+    let args = wasi::cli::environment::get_arguments();
+    let mode = args.get(1).map(String::as_str).unwrap_or("key");
+    let size = get_size().map_err(|_| ())?;
+    write(format!("SIZE={}x{}\n", size.columns, size.rows).into_bytes()).await?;
+    set_raw(true).map_err(|_| ())?;
+    write(b"RAW=on\n".to_vec()).await?;
+    match mode {
+        "leave" => return Ok(()),
+        "trap" => panic!("trap with raw mode on"),
+        _ => {}
+    }
+    let (mut input, _) = wasi::cli::stdin::read_via_stream();
+    let mut keys = Vec::new();
+    // Arrow keys arrive as ESC [ A..D; each read returns as soon as bytes exist.
+    while keys.len() < 3 {
+        let (_, bytes) = input.read(Vec::with_capacity(16)).await;
+        if bytes.is_empty() {
+            return Err(());
+        }
+        keys.extend(bytes);
+    }
+    let hex: String = keys.iter().map(|b| format!("{b:02x}")).collect();
+    write(format!("KEYS={hex}\n").into_bytes()).await?;
+    set_raw(false).map_err(|_| ())?;
+    write(b"RAW=off\n".to_vec()).await
 }
