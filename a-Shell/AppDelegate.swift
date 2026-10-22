@@ -363,9 +363,6 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         UserDefaults.standard.set(currentBuild, forKey: "buildNumber")
         self.versionUpToDate = true
         checkBookmarks() // activate all bookmarks in the app
-        if Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String == "a-Shell-mini" {
-            AgentsTerminal.shared.command("", scene: nil)
-        }
         // iCloud abilities:
         // We check whether the user has iCloud ability here, and that the container exists
         let currentiCloudToken = FileManager().ubiquityIdentityToken

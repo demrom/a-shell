@@ -22,7 +22,8 @@ struct RelayTLS {
 
     init(directory: URL, mutualTLS: Bool) throws {
         if mutualTLS {
-            let file = directory.appendingPathComponent(".relay-client-ca.der")
+            let enrolled = directory.appendingPathComponent(".relay-client-ca.der")
+            let file = FileManager.default.fileExists(atPath: enrolled.path) ? enrolled : directory.appendingPathComponent(".agentd-client-ca.der")
             guard let data = try? Data(contentsOf: file),
                   let certificate = SecCertificateCreateWithData(nil, data as CFData) else {
                 throw Self.failure("load enrolled client CA (.relay-client-ca.der)")
@@ -31,7 +32,10 @@ struct RelayTLS {
         } else {
             clientCA = nil
         }
-        let file = directory.appendingPathComponent(".relay-identity.p12")
+        let current = directory.appendingPathComponent(".relay-identity.p12")
+        let legacy = directory.appendingPathComponent(".agentd-identity.p12")
+        let inherited = !FileManager.default.fileExists(atPath: current.path) && FileManager.default.fileExists(atPath: legacy.path)
+        let file = inherited ? legacy : current
         if !FileManager.default.fileExists(atPath: file.path) {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             let data = try Self.generate()
@@ -39,7 +43,7 @@ struct RelayTLS {
         }
         try Self.protect(file)
         let data = try Data(contentsOf: file)
-        identity = try Self.importIdentity(data, passphrase: Self.passphrase)
+        identity = try Self.importIdentity(data, passphrase: inherited ? "agents" : Self.passphrase)
         var certificate: SecCertificate?
         guard SecIdentityCopyCertificate(identity, &certificate) == errSecSuccess, let certificate else { throw Self.failure("read TLS certificate") }
         let der = SecCertificateCopyData(certificate) as Data
@@ -220,6 +224,18 @@ struct RelayConfiguration: Codable {
             }
             return config
         }
+        // Preserve the existing enrolled client; do not generate replacement credentials.
+        let legacy = directory.appendingPathComponent(".agentd-tokens")
+        if FileManager.default.fileExists(atPath: legacy.path) {
+            let clients = try String(contentsOf: legacy, encoding: .utf8).components(separatedBy: .newlines)
+            if let fields = clients.map({ $0.split(whereSeparator: { $0 == " " || $0 == "\t" }).map(String.init) }).first(where: { $0.count >= 2 && $0[0] == "master" }) {
+                var config = Self(token: fields[1])
+                config.bind = "0.0.0.0"
+                try config.save(to: directory)
+                return config
+            }
+            throw failure("existing enrollment has no master client; refusing to replace it")
+        }
         var bytes = [UInt8](repeating: 0, count: 32)
         guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else {
             throw failure("could not generate token")
@@ -378,8 +394,10 @@ final class LocalHTTPServer {
                     guard !key.isEmpty, headers[key] == nil else { self.send(connection, status: 400, text: "duplicate header\n"); return }
                     headers[key] = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
                 }
+                // GET /screen carries no body and clients send it without Content-Length.
+                let bodyless = request[0] == "GET" || request[0] == "HEAD"
                 guard headers["transfer-encoding"] == nil,
-                      let length = Int(headers["content-length"] ?? (self.requiresContentLength ? "" : "0")), length >= 0, length <= 1024 * 1024 else {
+                      let length = Int(headers["content-length"] ?? (self.requiresContentLength && !bodyless ? "" : "0")), length >= 0, length <= 1024 * 1024 else {
                     self.send(connection, status: 400, text: "Content-Length required (up to 1 MiB)\n"); return
                 }
                 if data.count - end.upperBound >= length {
@@ -529,13 +547,38 @@ final class RelayServer {
         var difference = expected.count ^ given.count
         for index in expected.indices { difference |= Int(expected[index] ^ (index < given.count ? given[index] : 0)) }
         guard difference == 0 else { send(connection, status: 401, text: "bad token\n"); return }
+        #if os(iOS)
+        let path = URLComponents(string: target)?.path ?? ""
+        let reads = ["/windows", "/panes", "/screen", "/scrollback", "/size", "/cursor", "/state", "/shot"]
+        let writes = ["/type", "/keys", "/paste", "/wait", "/resize", "/clear"]
+        if method == "GET" && path == "/" { send(connection, status: 200, text: "relay\n"); return }
+        if method == "GET" && reads.contains(path) || method == "POST" && writes.contains(path) {
+            DispatchQueue.main.async {
+                do {
+                    let request = try TermRequest.http(target, body: body)
+                    TermTerminal.shared.perform(request) { result in
+                        self.queue.async { self.send(connection, status: result.status, body: result.data, contentType: result.contentType) }
+                    }
+                } catch { self.queue.async { self.send(connection, status: 400, text: "invalid terminal request\n") } }
+            }
+            return
+        }
+        #endif
         guard method == "POST", target == "/run" else { send(connection, status: 404, text: "use POST /run\n"); return }
         guard let command = String(data: body, encoding: .utf8), !command.utf8.contains(0) else { send(connection, status: 400, text: "UTF-8 command expected\n"); return }
         let cwd: URL
         if let path = headers["x-cwd"] {
             guard let decoded = path.removingPercentEncoding, !decoded.utf8.contains(0) else { send(connection, status: 400, text: "invalid X-Cwd\n"); return }
             cwd = URL(fileURLWithPath: (decoded as NSString).expandingTildeInPath, relativeTo: directory).standardizedFileURL
-        } else { cwd = directory }
+        } else {
+            #if os(iOS)
+            let bookmarks = UserDefaults.standard.dictionary(forKey: "bookmarkNames") ?? [:]
+            let vault = bookmarks["mansion"] as? String
+            cwd = vault.flatMap { FileManager.default.isReadableFile(atPath: $0) ? URL(fileURLWithPath: $0) : nil } ?? directory
+            #else
+            cwd = directory
+            #endif
+        }
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: cwd.path, isDirectory: &isDirectory), isDirectory.boolValue else { send(connection, status: 400, text: "X-Cwd is not a directory\n"); return }
         Self.executionLock.lock()
