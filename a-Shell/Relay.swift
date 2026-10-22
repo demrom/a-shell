@@ -218,7 +218,11 @@ struct RelayConfiguration: Codable {
             guard IPv4Address(config.bind) != nil || IPv6Address(config.bind) != nil else {
                 throw failure("bind must be a numeric IPv4 or IPv6 address")
             }
-            guard config.token.utf8.count >= 32, config.token.utf8.count <= 256,
+            let enrolled = (try? String(contentsOf: directory.appendingPathComponent(".agentd-tokens"), encoding: .utf8))?.components(separatedBy: .newlines).contains { line in
+                let fields = line.split(whereSeparator: { $0.isWhitespace })
+                return fields.count >= 2 && fields[0] == "master" && fields[1] == config.token
+            } ?? false
+            guard (config.token.utf8.count >= 32 || enrolled), config.token.utf8.count <= 256,
                   config.token.utf8.allSatisfy({ $0 >= 33 && $0 <= 126 }) else {
                 throw failure("token must contain 32 to 256 printable ASCII characters without spaces")
             }
@@ -374,14 +378,17 @@ final class LocalHTTPServer {
         }
     }
 
+    // Legacy agent routes accept file uploads up to 64 MiB; every other listener keeps 1 MiB.
+    var requestBodyLimit = 1024 * 1024
+
     private func receive(_ connection: NWConnection, id: UUID, accumulated: Data) {
         connection.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] bytes, _, ended, error in
             guard let self else { connection.cancel(); return }
             var data = accumulated
             if let bytes { data.append(bytes) }
-            guard data.count <= 1024 * 1024 + 16384 else { self.send(connection, status: 413, text: "request too large\n"); return }
+            guard data.count <= self.requestBodyLimit + 65536 else { self.send(connection, status: 413, text: "request too large\n"); return }
             if let end = data.range(of: Data("\r\n\r\n".utf8)) {
-                guard end.lowerBound <= 16384, let header = String(data: data[..<end.lowerBound], encoding: .isoLatin1) else {
+                guard end.lowerBound <= 65536, let header = String(data: data[..<end.lowerBound], encoding: .isoLatin1) else {
                     self.send(connection, status: 400, text: "invalid headers\n"); return
                 }
                 let lines = header.components(separatedBy: "\r\n")
@@ -397,26 +404,27 @@ final class LocalHTTPServer {
                 // GET /screen carries no body and clients send it without Content-Length.
                 let bodyless = request[0] == "GET" || request[0] == "HEAD"
                 guard headers["transfer-encoding"] == nil,
-                      let length = Int(headers["content-length"] ?? (self.requiresContentLength && !bodyless ? "" : "0")), length >= 0, length <= 1024 * 1024 else {
-                    self.send(connection, status: 400, text: "Content-Length required (up to 1 MiB)\n"); return
+                      let length = Int(headers["content-length"] ?? (self.requiresContentLength && !bodyless ? "" : "0")), length >= 0, length <= self.requestBodyLimit else {
+                    self.send(connection, status: 400, text: "Content-Length required (up to \(self.requestBodyLimit / (1024 * 1024)) MiB)\n"); return
                 }
                 if data.count - end.upperBound >= length {
                     self.receiving.remove(id)
                     self.request?(connection, request[0], request[1], headers, Data(data[end.upperBound..<(end.upperBound + length)]))
                     return
                 }
-            } else if data.count > 16384 { self.send(connection, status: 431, text: "headers too large\n"); return }
+            } else if data.count > 65536 { self.send(connection, status: 431, text: "headers too large\n"); return }
             if ended || error != nil { connection.cancel(); return }
             self.receive(connection, id: id, accumulated: data)
         }
     }
 
-    static func send(_ connection: NWConnection, status: Int, body: Data, headers: [String: String]) {
+    static func send(_ connection: NWConnection, status: Int, body: Data, headers: [String: String], sent: (() -> Void)? = nil) {
         var fields = headers
         fields["Content-Length"] = String(body.count)
         fields["Connection"] = "close"
         let header = "HTTP/1.1 \(status) \(HTTPURLResponse.localizedString(forStatusCode: status))\r\n" + fields.sorted { $0.key < $1.key }.map { "\($0.key): \($0.value)\r\n" }.joined() + "\r\n"
         connection.send(content: Data(header.utf8) + body, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { [connection] error in
+            defer { sent?() }
             guard error == nil else { connection.cancel(); return }
             // Let the peer consume queued TLS records before closing the connection.
             connection.receive(minimumIncompleteLength: 1, maximumLength: 1) { _, _, _, _ in connection.cancel() }
@@ -445,8 +453,11 @@ final class RelayServer {
     private let execute: (String, String, @escaping () -> Void) -> Result
     private let stateChanged: (Int?) -> Void
     private let directory: URL
+    #if os(iOS)
+    private var agentRoutes: RelayAgentRoutes?
+    #endif
     private let queue: DispatchQueue
-    private static let commands = DispatchQueue(label: "relay.commands", qos: .utility)
+    fileprivate static let commands = DispatchQueue(label: "relay.commands", qos: .utility)
     private static let executionLock = NSLock()
     private static var refusingCommands = false
     private static var cancellationWaiters: [UUID: () -> Void] = [:]
@@ -517,12 +528,43 @@ final class RelayServer {
     init(configuration: RelayConfiguration, directory: URL, execute: @escaping (String, String, @escaping () -> Void) -> Result, stateChanged: @escaping (Int?) -> Void) throws {
         self.configuration = configuration
         self.directory = directory
+        #if os(iOS)
+        let enrollment = directory.appendingPathComponent(".agentd-tokens")
+        if FileManager.default.fileExists(atPath: enrollment.path) {
+            let bookmarks = UserDefaults.standard.dictionary(forKey: "bookmarkNames") ?? [:]
+            let vault = bookmarks["mansion"] as? String
+            let root = vault.flatMap { FileManager.default.isReadableFile(atPath: $0) ? $0 : nil } ?? directory.path
+            agentRoutes = try RelayAgentRoutes(root: root, tokensFile: enrollment, execute: { command, cwd in
+                Self.commands.sync {
+                    Relay.executeLegacy(command, cwd: cwd)
+                }
+            }, terminal: { target, body, reply in
+                DispatchQueue.main.async {
+                    if target == "/restart" {
+                        var response = RelayAgentRoutes.Reply(200, "restarting\n")
+                        response.sent = { DispatchQueue.global().async { _ = Relay.shared.command("on") } }
+                        reply(response)
+                        return
+                    }
+                    do {
+                        let request = target == "/term" ? try JSONDecoder().decode(TermRequest.self, from: body) : try TermRequest.http(target, body: body)
+                        TermTerminal.shared.perform(request) { result in
+                            reply(.init(result.status, data: result.data, headers: ["Content-Type": result.contentType]))
+                        }
+                    } catch { reply(.init(400, "invalid terminal request\n")) }
+                }
+            })
+        }
+        #endif
         self.execute = execute
         self.stateChanged = stateChanged
         let queue = DispatchQueue(label: "relay.http")
         self.queue = queue
         tls = try RelayTLS(directory: directory, mutualTLS: configuration.mutualTLS)
         http = LocalHTTPServer(queue: queue, requiresContentLength: true, connectionLimit: 8)
+        #if os(iOS)
+        if agentRoutes != nil { http.requestBodyLimit = 64 * 1024 * 1024 }
+        #endif
         http.request = { [weak self] connection, method, target, headers, body in
             self?.route(connection, method: method, target: target, headers: headers, body: body)
         }
@@ -543,6 +585,16 @@ final class RelayServer {
     func stop(_ stopped: @escaping () -> Void) { http.stop(stopped) }
 
     private func route(_ connection: NWConnection, method: String, target: String, headers: [String: String], body: Data) {
+        #if os(iOS)
+        if let agentRoutes {
+            agentRoutes.perform(method, target, headers, body) { response in
+                self.queue.async {
+                    LocalHTTPServer.send(connection, status: response.status, body: response.body, headers: response.headers, sent: response.sent)
+                }
+            }
+            return
+        }
+        #endif
         let expected = Array(configuration.token.utf8), given = Array((headers["x-token"] ?? "").utf8)
         var difference = expected.count ^ given.count
         for index in expected.indices { difference |= Int(expected[index] ^ (index < given.count ? given[index] : 0)) }
@@ -854,7 +906,44 @@ final class Relay: ObservableObject {
         }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, clients: clients))
     }
 
-    private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
+    fileprivate static func executeLegacy(_ command: String, cwd: String) -> (Int, Data) {
+        guard let session = strdup(UUID().uuidString), let input = fopen("/dev/null", "r"), let output = tmpfile() else { return (-1, Data("agents: could not open command streams\n".utf8)) }
+        defer {
+            // Dispatch workers are reused; never retain pointers to this closed request.
+            thread_stdin = nil
+            thread_stdout = nil
+            thread_stderr = nil
+            thread_context = nil
+            ios_closeSession(session); free(session); fclose(input); fclose(output)
+        }
+        // ios_setStreams updates session state, while ios_system only fills nil TLS.
+        thread_stdin = nil
+        thread_stdout = nil
+        thread_stderr = nil
+        thread_context = nil
+        ios_switchSession(session)
+        ios_setContext(session)
+        ios_setStreams(input, output, output)
+        ios_settty(nil)
+        ios_setDirectoryURL(URL(fileURLWithPath: cwd))
+        let pid = ios_fork()
+        ios_system(command.decomposedStringWithCanonicalMapping)
+        ios_waitpid(pid)
+        let code = ios_getCommandStatus()
+        ios_releaseThreadId(pid)
+        fflush(output)
+        rewind(output)
+        var result = Data()
+        var bytes = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = fread(&bytes, 1, bytes.count, output)
+            if count == 0 { break }
+            result.append(contentsOf: bytes.prefix(count))
+        }
+        return (Int(code), result)
+    }
+
+    fileprivate static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
         guard let session = strdup(UUID().uuidString) else { return .init(stdout: "", stderr: "could not allocate session\n", status: -1) }
         defer { free(session) }
         guard let input = fopen("/dev/null", "r") else { return .init(stdout: "", stderr: "could not open stdin\n", status: -1) }
@@ -959,5 +1048,193 @@ public func relayMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutableP
     let (status, message) = Relay.shared.command(argument)
     fputs(message, status == 0 ? thread_stdout : thread_stderr)
     return status
+}
+#endif
+
+#if os(iOS)
+private final class RelayAgentRoutes {
+    struct Client {
+        let name: String
+        let token: String
+        let home: String
+    }
+    struct Reply {
+        let status: Int
+        var body: Data
+        var headers: [String: String] = [:]
+        var sent: (() -> Void)?
+        init(_ status: Int, _ text: String, headers: [String: String] = [:]) {
+            self.status = status
+            self.body = Data(text.utf8)
+            self.headers = headers
+        }
+        init(_ status: Int, data: Data, headers: [String: String] = [:]) {
+            self.status = status
+            self.body = data
+            self.headers = headers
+        }
+    }
+    private final class Job {
+        let id: Int
+        let command: String
+        let cwd: String
+        let owner: String
+        let started = Date()
+        var state = "queued"
+        var code = 0
+        var output = Data()
+        var waiters: [UUID: (Reply) -> Void] = [:]
+        init(_ id: Int, _ command: String, _ cwd: String, _ owner: String) {
+            self.id = id; self.command = command; self.cwd = cwd; self.owner = owner
+        }
+        var line: String { "\(id)\t\(owner)\t\(state)\t\(Int(-started.timeIntervalSinceNow))s\t\(cwd)\t\(command)" }
+    }
+    let root: String
+    let clients: [Client]
+    private let credentialDirectory: URL
+    private let execute: (String, String) -> (Int, Data)
+    private let terminal: (String, Data, @escaping (Reply) -> Void) -> Void
+    private let queue = DispatchQueue(label: "agents.http")
+    private var jobs: [Job] = []
+    private var nextID = 1
+    private var current: Job?
+
+    init(root: String, tokensFile: URL, execute: @escaping (String, String) -> (Int, Data), terminal: @escaping (String, Data, @escaping (Reply) -> Void) -> Void) throws {
+        self.root = root
+        self.execute = execute
+        self.terminal = terminal
+        credentialDirectory = tokensFile.deletingLastPathComponent()
+        try RelayTLS.protect(tokensFile)
+        var loaded: [Client] = []
+        for line in try String(contentsOf: tokensFile, encoding: .utf8).components(separatedBy: .newlines) {
+            let parts = line.split(whereSeparator: { $0.isWhitespace }).map(String.init)
+            guard let name = parts.first, !name.hasPrefix("#") else { continue }
+            guard parts.count >= 2 else { throw NSError(domain: "agents.tokens", code: 1, userInfo: [NSLocalizedDescriptionKey: "Invalid .agentd-tokens line"] ) }
+            let home = parts.count > 2 ? Self.path(parts[2], base: root) : ""
+            if !home.isEmpty { try FileManager.default.createDirectory(atPath: home, withIntermediateDirectories: true) }
+            loaded.append(Client(name: name, token: parts[1], home: home.isEmpty ? "" : Self.real(home)))
+        }
+        guard !loaded.isEmpty else { throw NSError(domain: "agents.tokens", code: 2, userInfo: [NSLocalizedDescriptionKey: "No clients in .agentd-tokens"]) }
+        clients = loaded
+    }
+
+    func perform(_ method: String, _ target: String, _ headers: [String: String], _ body: Data, reply: @escaping (Reply) -> Void) {
+        queue.async { self.route(method, target, headers, body, reply: reply) }
+    }
+
+    private static func real(_ path: String) -> String { URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath().path }
+    private static func path(_ path: String, base: String) -> String {
+        let expanded = (path as NSString).expandingTildeInPath
+        return expanded.hasPrefix("/") ? expanded : (base as NSString).appendingPathComponent(expanded)
+    }
+    private func authorized(_ token: String) -> Client? {
+        clients.first { client in
+            let expected = Array(client.token.utf8), given = Array(token.utf8)
+            var difference = expected.count ^ given.count
+            for index in expected.indices { difference |= Int(expected[index] ^ (index < given.count ? given[index] : 0)) }
+            return difference == 0
+        }
+    }
+    private func route(_ method: String, _ target: String, _ headers: [String: String], _ body: Data, reply: @escaping (Reply) -> Void) {
+        guard let client = authorized(headers["x-token"] ?? "") else { reply(Reply(401, "bad token\n")); return }
+        guard let url = URLComponents(string: target) else { reply(Reply(400, "invalid target\n")); return }
+        let query = url.queryItems ?? []
+        let cwd = Self.path((headers["x-cwd"] ?? "").removingPercentEncoding ?? "", base: client.home.isEmpty ? root : client.home)
+        let file = Self.path(query.first(where: { $0.name == "path" })?.value ?? "", base: cwd)
+        func fenced(_ path: String) -> Bool {
+            let real = Self.real(path)
+            if client.home.isEmpty || real == client.home || real.hasPrefix(client.home + "/") { return false }
+            reply(Reply(403, "\(client.name) is fenced into \(client.home): \(real)\n"))
+            return true
+        }
+        switch (method, url.path) {
+        case ("GET", "/"):
+            if !fenced(cwd) { reply(Reply(200, "\(cwd)\nclient: \(client.name)\n")) }
+        case ("POST", "/restart"), ("POST", "/term"):
+            terminal(url.path, body, reply)
+        case ("GET", "/windows"), ("GET", "/panes"), ("GET", "/screen"), ("GET", "/scrollback"), ("GET", "/size"), ("GET", "/cursor"), ("GET", "/state"), ("GET", "/shot"), ("POST", "/type"), ("POST", "/keys"), ("POST", "/paste"), ("POST", "/wait"), ("POST", "/resize"), ("POST", "/clear"):
+            terminal(target, body, reply)
+        case ("GET", "/file"):
+            guard !fenced(file) else { return }
+            do { reply(Reply(200, data: try Data(contentsOf: URL(fileURLWithPath: file)))) }
+            catch { reply(Reply(404, "\(error.localizedDescription)\n")) }
+        case ("PUT", "/file"):
+            guard query.contains(where: { $0.name == "path" && !($0.value ?? "").isEmpty }) else { reply(Reply(404, "use PUT /file?path=...\n")); return }
+            guard !fenced(file) else { return }
+            do {
+                let destination = URL(fileURLWithPath: file)
+                let credential = Self.real(destination.deletingLastPathComponent().path) == Self.real(credentialDirectory.path)
+                    && [".agentd-identity.p12", ".agentd-tokens", ".agentd-client-ca.der"].contains(destination.lastPathComponent)
+                try body.write(to: destination, options: credential ? .atomic : [])
+                if credential {
+                    try RelayTLS.protect(destination)
+                }
+                reply(Reply(200, "written\n"))
+            }
+            catch { reply(Reply(500, "\(error.localizedDescription)\n")) }
+        case ("POST", "/run"), ("POST", "/submit"):
+            guard !fenced(cwd) else { return }
+            var directory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: cwd, isDirectory: &directory), directory.boolValue else { reply(Reply(400, "X-Cwd: not a directory: \(cwd)\n")); return }
+            guard let timeout = Double(headers["x-timeout"] ?? "300"), timeout.isFinite else { reply(Reply(400, "X-Timeout: seconds expected\n")); return }
+            guard let command = String(data: body, encoding: .utf8) else { reply(Reply(400, "UTF-8 command expected\n")); return }
+            let job = Job(nextID, command, cwd, client.name)
+            nextID += 1
+            jobs.append(job)
+            for old in jobs.dropLast(20) where old.state == "done" || old.state == "abandoned" { jobs.removeAll { $0 === old } }
+            if url.path == "/submit" {
+                startNext()
+                reply(Reply(202, "\(job.id)\n", headers: ["X-Job": String(job.id)]))
+                return
+            }
+            let waiter = UUID()
+            job.waiters[waiter] = reply
+            startNext()
+            queue.asyncAfter(deadline: .now() + max(0, min(timeout, 86400))) {
+                if let callback = job.waiters.removeValue(forKey: waiter) { callback(self.result(job)) }
+            }
+        case ("GET", "/jobs"):
+            reply(Reply(200, jobs.map { $0.line + "\n" }.joined()))
+        case ("GET", "/job"), ("POST", "/abandon"):
+            guard let id = Int(query.first(where: { $0.name == "id" })?.value ?? ""), let job = jobs.first(where: { $0.id == id }) else { reply(Reply(404, "no such job; GET /jobs lists them\n")); return }
+            if method == "GET" { reply(result(job)); return }
+            guard client.home.isEmpty || job.owner == client.name else { reply(Reply(403, "\(client.name) is fenced and cannot abandon \(job.owner)'s job\n")); return }
+            guard job.state == "running" || job.state == "queued" else { reply(Reply(409, job.line + "\n")); return }
+            job.state = "abandoned"
+            if current === job { current = nil }
+            notify(job)
+            reply(Reply(200, job.line + "\n"))
+            startNext()
+        default: reply(Reply(404, "unknown route\n"))
+        }
+    }
+    private func result(_ job: Job) -> Reply {
+        let headers = ["X-Job": String(job.id)]
+        if job.state == "done" { return Reply(200, data: job.output, headers: headers.merging(["X-Exit-Code": String(job.code)]) { _, new in new }) }
+        if job.state == "abandoned" { return Reply(410, "job \(job.id) was abandoned\n", headers: headers) }
+        let ahead = current == nil || current === job ? "" : "; waiting behind job \(current!.id): \(current!.command)"
+        return Reply(504, "job \(job.id) \(job.state) for \(Int(-job.started.timeIntervalSinceNow))s\(ahead)\nGET /job?id=\(job.id) for the result, POST /abandon?id=\(job.id) if it hangs\n", headers: headers)
+    }
+    private func notify(_ job: Job) {
+        let callbacks = job.waiters.values
+        job.waiters.removeAll()
+        for callback in callbacks { callback(result(job)) }
+    }
+    private func startNext() {
+        guard current == nil, let job = jobs.first(where: { $0.state == "queued" }) else { return }
+        current = job
+        job.state = "running"
+        DispatchQueue.global(qos: .utility).async {
+            let (code, output) = self.execute(job.command, job.cwd)
+            self.queue.async {
+                job.code = code; job.output = output
+                guard job.state != "abandoned" else { return }
+                job.state = "done"
+                if self.current === job { self.current = nil }
+                self.notify(job)
+                self.startNext()
+            }
+        }
+    }
 }
 #endif
