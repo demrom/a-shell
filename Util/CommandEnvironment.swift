@@ -15,8 +15,14 @@ func initializeCommandEnvironment(hostInfo: [String: Any], resourcePath: String,
     setenv("COLORTERM", "truecolor", 1) // tell programs that we can display 16-bit colors (required by Python package rich).
     setenv("SSL_CERT_FILE", resourcePath +  "/cacert.pem", 1); // SLL cacert.pem in $APPDIR/cacert.pem
     setenv("MAGIC", resourcePath +  "/usr/share/magic.mgc", 1); // magic file for file command
-    setenv("SHORTCUTS", groupURL?.path, 1) // directory used by shortcuts
-    setenv("GROUP", groupURL?.path, 1) // directory used by shortcuts
+    if let groupURL {
+        setenv("SHORTCUTS", groupURL.path, 1) // directory used by shortcuts
+        setenv("GROUP", groupURL.path, 1) // directory used by shortcuts
+    } else {
+        NSLog("App Group container unavailable; SHORTCUTS and GROUP are unset")
+        unsetenv("SHORTCUTS")
+        unsetenv("GROUP")
+    }
     setenv("MANPATH", resourcePath +  "/man:" + libraryURL.path + "/man", 1)
     setenv("PAGER", "less", 1) // send control sequences directly to terminal
     setenv("TERM", "xterm-256color", 1); // now that we use SwiftTerm
@@ -28,6 +34,9 @@ func initializeCommandEnvironment(hostInfo: [String: Any], resourcePath: String,
         setenv("PS1", "[\\W]\\$ ", 1) // iPhone default prompt: last path component
     }
     setenv("TERMINFO", resourcePath +  "/terminfo/", 1) // Provide terminfo so termcap has a database
+    // iOS less hardcodes malformed page keys; use its stock capability overrides.
+    setenv("LESS_TERMCAP_kN", "\u{1b}[6~", 1)
+    setenv("LESS_TERMCAP_kP", "\u{1b}[5~", 1)
     setenv("TZ", TimeZone.current.identifier, 1) // TimeZone information, since "systemsetup -gettimezone" won't work.
     // Make sure aws (Python package) can work:
     setenv("AWS_SHARED_CREDENTIALS_FILE", documentsUrl.appendingPathComponent(".aws/credentials").path, 1)

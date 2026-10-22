@@ -9,6 +9,11 @@ import SwiftTerm // for the terminal window
 import ios_system
 import TipKit // for helpful tips
 
+#if HERDR_EMBEDDED
+@_silgen_name("herdr_ios_resize")
+private func herdrResize(_ cols: UInt16, _ rows: UInt16)
+#endif
+
 extension SceneDelegate {
     
     func longestCommonPrefix(_ strs: [String]) -> String {
@@ -631,6 +636,9 @@ extension SceneDelegate {
     
     // TerminalViewDelegate stubs:
     func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
+        #if HERDR_EMBEDDED
+        herdrResize(UInt16(clamping: newCols), UInt16(clamping: newRows))
+        #endif
         if (newRows != height) || (newCols != width) {
             ios_setWindowSize(Int32(newCols), Int32(newRows), self.persistentIdentifier?.toCString())
         }
@@ -1493,6 +1501,19 @@ extension SceneDelegate {
         }
     }
     
+    #if HERDR_EMBEDDED
+    @objc func nativeControlModifierReset(_ notification: Notification) {
+        controlOn = false
+        var buttons = editorToolbar.items ?? []
+        for group in (terminalView?.inputAssistantItem.leadingBarButtonGroups ?? []) + (terminalView?.inputAssistantItem.trailingBarButtonGroups ?? []) {
+            buttons.append(contentsOf: group.barButtonItems)
+        }
+        for button in buttons where title(button) == "control" {
+            button.isSelected = false
+        }
+    }
+    #endif
+
     func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
         if data.contains(13) || data.contains(10) { editorToolbar.closeSymbols() }
         // This is where I treat the incoming keypress
@@ -1506,6 +1527,7 @@ extension SceneDelegate {
         }
         // if control is pressed, we have to change the data
         var myData = data
+        #if !HERDR_EMBEDDED
         if (controlOn) {
             // a) switch control off
             controlOn = false
@@ -1573,6 +1595,7 @@ extension SceneDelegate {
                 // Q: what should I do if this cannot be converted to UTF8?
             }
         }
+        #endif
         // if a command is running, send the data directly (except for webAssembly commands, who need a string)
         if (currentCommand != "") {
             // Node owns command streams, not a terminal signal-generating process.
@@ -1723,9 +1746,9 @@ extension SceneDelegate {
             }
         }
         if (data.count >= 5) {
-            // kitty KB: (escape + [? + keyboardEnhancementFlags.rawValue + u)
-            // escape + [ + ? + ??? + u
-            if (data[0] == 0x1b) && (data[1] == 0x5b) && (data[2] == 0x3f) && (data[data.count-1] == 0x75) {
+            // Kitty keyboard and primary device-attributes replies are not editor input.
+            // Interactive commands receive them above; late replies after exit are discarded.
+            if (data[0] == 0x1b) && (data[1] == 0x5b) && (data[2] == 0x3f) && ((data[data.count-1] == 0x75) || (data[data.count-1] == 0x63)) {
                 return
             }
         }
@@ -1922,4 +1945,851 @@ extension SceneDelegate {
             })
         }
     }
+}
+
+// BEGIN native agents Terminal.swift
+import UIKit
+import SwiftTerm
+import ios_system
+
+// All terminal access stays on the same main thread as human keyboard input.
+final class AgentsTerminal {
+    static let shared = AgentsTerminal()
+    private var server: AgentServer?
+    private var banner: UILabel?
+    private var activationObserver: NSObjectProtocol?
+    private var announcedCertificate = false
+    var running: Bool { server != nil }
+
+    func commandWhenActive(_ argument: String) {
+        if argument.isEmpty {
+            command(argument, scene: scene())
+            return
+        }
+        if let scene = scene(), scene.terminalView != nil {
+            command(argument, scene: scene)
+            return
+        }
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self] _ in
+            guard let self else { return }
+            if let observer = self.activationObserver { NotificationCenter.default.removeObserver(observer) }
+            self.activationObserver = nil
+            self.commandWhenActive(argument)
+        }
+    }
+
+    private func scene() -> SceneDelegate? {
+        TermTerminal.shared.scene()
+    }
+
+    func command(_ argument: String, scene: SceneDelegate?) {
+        if argument == "reload" { reload(); return }
+        if argument == "off" { stop(); scene?.terminalView?.feed(text: "agents stopped\r\n"); return }
+        if argument == "tokens" {
+            guard let server else { scene?.terminalView?.feed(text: "agents: start the bridge first\r\n"); return }
+            for client in server.clients { scene?.terminalView?.feed(text: "token \(client.name): \(client.token)\r\n") }
+            return
+        }
+        guard argument.isEmpty else { scene?.terminalView?.feed(text: "usage: agents [off|tokens|reload]\r\n"); return }
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        if let server {
+            // Older managed profiles remove this marker before invoking agents.
+            try? "agentd running\n".write(to: documents.appendingPathComponent("agentd-running"), atomically: true, encoding: .utf8)
+            if let scene { announce(server, scene: scene); showBanner(scene) }
+            return
+        }
+        let bookmarks = UserDefaults.standard.dictionary(forKey: "bookmarkNames") ?? [:]
+        let vault = bookmarks["mansion"] as? String
+        let root = vault.flatMap { FileManager.default.isReadableFile(atPath: $0) ? $0 : nil } ?? documents.path
+        do {
+            let server = try AgentServer(root: root, tokensFile: documents.appendingPathComponent(".agentd-tokens"), execute: Self.execute) { route, body, reply in
+                DispatchQueue.main.async { self.terminal(route, body, reply: reply) }
+            }
+            self.server = server
+            try server.start { result in
+                DispatchQueue.main.async {
+                    guard self.server === server else { return }
+                    switch result {
+                    case .success: self.presentWhenActive(server)
+                    case .failure(let error): self.stop(); scene?.terminalView?.feed(text: "agents: \(error.localizedDescription)\r\n")
+                    }
+                }
+            }
+            try "agentd running\n".write(to: documents.appendingPathComponent("agentd-running"), atomically: true, encoding: .utf8)
+        } catch { stop(); scene?.terminalView?.feed(text: "agents: \(error.localizedDescription)\r\n") }
+    }
+
+    private func presentWhenActive(_ server: AgentServer) {
+        guard self.server === server else { return }
+        if let scene = scene(), scene.terminalView != nil {
+            announce(server, scene: scene)
+            showBanner(scene)
+            return
+        }
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = NotificationCenter.default.addObserver(forName: UIScene.didActivateNotification, object: nil, queue: .main) { [weak self, weak server] _ in
+            guard let self, let server else { return }
+            if let observer = self.activationObserver { NotificationCenter.default.removeObserver(observer) }
+            self.activationObserver = nil
+            self.presentWhenActive(server)
+        }
+    }
+
+    private func reload() {
+        stop { self.command("", scene: self.scene()) }
+    }
+
+    func stop(_ stopped: @escaping () -> Void = {}) {
+        if let activationObserver { NotificationCenter.default.removeObserver(activationObserver) }
+        activationObserver = nil
+        let previous = server
+        server = nil
+        banner?.removeFromSuperview()
+        banner = nil
+        let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        try? FileManager.default.removeItem(at: documents.appendingPathComponent("agentd-running"))
+        if let previous { previous.stop { DispatchQueue.main.async(execute: stopped) } }
+        else { stopped() }
+    }
+
+    private func announce(_ server: AgentServer, scene: SceneDelegate) {
+        // Profile re-entry must not overwrite a TUI or send it printPrompt's newline.
+        guard scene.currentCommand.isEmpty else { return }
+        var address = "127.0.0.1"
+        var interfaces: UnsafeMutablePointer<ifaddrs>?
+        if getifaddrs(&interfaces) == 0, let first = interfaces {
+            var entry: UnsafeMutablePointer<ifaddrs>? = first
+            while let current = entry {
+                let interface = current.pointee
+                if let addr = interface.ifa_addr, addr.pointee.sa_family == UInt8(AF_INET), String(cString: interface.ifa_name) == "en0" {
+                    var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                    if getnameinfo(addr, socklen_t(addr.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 { address = String(cString: host) }
+                }
+                entry = interface.ifa_next
+            }
+            freeifaddrs(first)
+        }
+        let home = NSHomeDirectory()
+        let root = server.root.hasPrefix(home + "/") ? "~" + String(server.root.dropFirst(home.count)) : String(cString: ios_getBookmarkedVersion(server.root.utf8CString))
+        var text = "\r\nagentd on https://agents.local:8765\r\naddress=\(address)\r\nroot=\(root)\r\ntokens: ~/Documents/.agentd-tokens\r\ncert: ~/Documents/.agentd-cert.pem\r\n"
+        if server.tls.newlyCreated && !announcedCertificate {
+            text += "certificate SHA256: \(server.tls.fingerprint)\r\n"
+            announcedCertificate = true
+        }
+        text += "agents off or Return at an empty shell prompt to stop\r\n"
+        scene.terminalView?.feed(text: text)
+        scene.printPrompt()
+    }
+
+    private func showBanner(_ scene: SceneDelegate) {
+        guard let window = scene.terminalView?.window else { return }
+        banner?.removeFromSuperview()
+        let label = UILabel()
+        label.text = "  agents serving :8765  "
+        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = .systemIndigo
+        label.layer.cornerRadius = 6
+        label.clipsToBounds = true
+        label.isUserInteractionEnabled = false
+        label.translatesAutoresizingMaskIntoConstraints = false
+        window.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 3),
+            label.trailingAnchor.constraint(equalTo: window.safeAreaLayoutGuide.trailingAnchor, constant: -8)
+        ])
+        banner = label
+    }
+
+    private func terminal(_ route: String, _ body: Data, reply: @escaping (AgentServer.Reply) -> Void) {
+        if route == "/restart" {
+            var response = AgentServer.Reply(200, "restarting\n")
+            response.sent = { DispatchQueue.main.async { self.reload() } }
+            reply(response)
+            return
+        }
+        do {
+            let request = try TermRequest.http(route, body: body)
+            TermTerminal.shared.perform(request) { result in
+                reply(.init(result.status, data: result.data, headers: ["Content-Type": result.contentType]))
+            }
+        } catch { reply(.init(400, "\(error.localizedDescription)\n")) }
+    }
+
+    private static func execute(_ command: String, cwd: String) -> (Int, Data) {
+        guard let session = strdup(UUID().uuidString), let input = fopen("/dev/null", "r"), let output = tmpfile() else { return (-1, Data("agents: could not open command streams\n".utf8)) }
+        defer {
+            // Dispatch workers are reused; never retain pointers to this closed request.
+            thread_stdin = nil
+            thread_stdout = nil
+            thread_stderr = nil
+            thread_context = nil
+            ios_closeSession(session); free(session); fclose(input); fclose(output)
+        }
+        // ios_setStreams updates session state, while ios_system only fills nil TLS.
+        thread_stdin = nil
+        thread_stdout = nil
+        thread_stderr = nil
+        thread_context = nil
+        ios_switchSession(session)
+        ios_setContext(session)
+        ios_setStreams(input, output, output)
+        ios_settty(nil)
+        ios_setDirectoryURL(URL(fileURLWithPath: cwd))
+        let pid = ios_fork()
+        ios_system(command.decomposedStringWithCanonicalMapping)
+        ios_waitpid(pid)
+        let code = ios_getCommandStatus()
+        ios_releaseThreadId(pid)
+        fflush(output)
+        rewind(output)
+        var result = Data()
+        var bytes = [UInt8](repeating: 0, count: 65536)
+        while true {
+            let count = fread(&bytes, 1, bytes.count, output)
+            if count == 0 { break }
+            result.append(contentsOf: bytes.prefix(count))
+        }
+        return (Int(code), result)
+    }
+}
+
+@_cdecl("ashell_agents")
+public func ashellAgents(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32 {
+    let argument = argc > 1 ? String(cString: argv![1]!) : ""
+    DispatchQueue.main.async {
+        AgentsTerminal.shared.commandWhenActive(argument)
+    }
+    return 0
+}
+import Foundation
+import CoreFoundation
+
+// The command and HTTP transport share this request contract. UIKit and Herdr
+// are adapters at the boundary; neither transport owns terminal operations.
+struct TermRequest: Codable, Sendable {
+    let verb: String
+    var window: String?
+    var pane: String?
+    var text: String?
+    var bytes: Data?
+    var keys: [String] = []
+    var delays: [Int] = []
+    var lines: Int?
+    var timeout: Double = 30
+    var columns: Int?
+    var rows: Int?
+    var json = false
+    var colors = false
+
+    static let help = """
+    Usage: term <command> [--window ID] [--pane ID] [--json]
+    Script and debug your own programs in another terminal or Herdr pane.
+    Commands:
+      windows                     List terminal windows and activation state
+      panes                       List Herdr panes
+      screen [--colors]           Read the visible terminal; --colors returns JSON
+                                  cells with exact color indices/RGB and styles
+      scrollback [--lines N]       Read terminal history
+      type TEXT | --key KEY...     Type text or keyboard keys (enter, esc, ctrl-c,
+                                  up, down, pgdn, pgup, home, end, tab, ...)
+      keys BYTES                  Send raw UTF-8 or escapes: \\e \\n \\r \\t \\xHH \\\\
+      paste TEXT                  Send bracketed paste when enabled
+      wait --text REGEX [--timeout SECONDS]
+                                  Wait for matching visible text; timeout exits 124
+      size | cursor | state       Read geometry, cursor or command/session state
+      resize COLSxROWS            Resize the target and notify its program
+      clear                       Clear the visible display
+      shot FILE.png               Save the rendered target
+    Run from a different pane, window, script, Shortcuts or the agents bridge.
+    Select a window explicitly when several are available; --pane selects a
+    Herdr pane without changing keyboard focus. All reads accept --json.
+    Anything running in a-Shell can read and type into its terminals.
+    """
+
+    struct Invalid: LocalizedError {
+        let message: String
+        var errorDescription: String? { message }
+        init(_ message: String) { self.message = message }
+    }
+
+    static func parse(_ arguments: [String]) throws -> TermRequest {
+        guard let verb = arguments.first else { throw Invalid("missing command; use term --help") }
+        let verbs = ["windows", "panes", "screen", "scrollback", "type", "keys", "paste", "wait", "size", "resize", "cursor", "clear", "state", "shot"]
+        guard verbs.contains(verb) else { throw Invalid("unknown command: \(verb)") }
+        var request = TermRequest(verb: verb)
+        var positional: [String] = []
+        var index = 1
+        var literal = false
+        while index < arguments.count {
+            let argument = arguments[index]
+            index += 1
+            if literal { positional.append(argument); continue }
+            if argument == "--" { literal = true; continue }
+            if argument == "--json" { request.json = true; continue }
+            if argument == "--colors", verb == "screen" { request.colors = true; request.json = true; continue }
+            if !argument.hasPrefix("--") { positional.append(argument); continue }
+            guard index < arguments.count else { throw Invalid("missing value for \(argument)") }
+            let value = arguments[index]
+            index += 1
+            switch argument {
+            case "--window": request.window = value
+            case "--pane": request.pane = value
+            case "--key" where verb == "type": request.keys.append(value)
+            case "--text" where verb == "wait": request.text = value
+            case "--lines" where verb == "scrollback":
+                guard let count = Int(value), (1...100000).contains(count) else { throw Invalid("--lines must be 1...100000") }
+                request.lines = count
+            case "--timeout" where verb == "wait":
+                guard let seconds = Double(value), seconds.isFinite, (0...3600).contains(seconds) else { throw Invalid("--timeout must be 0...3600 seconds") }
+                request.timeout = seconds
+            default: throw Invalid("unsupported option for \(verb): \(argument)")
+            }
+        }
+        switch verb {
+        case "type", "keys", "paste", "shot":
+            guard positional.count <= 1 else { throw Invalid("quote text as one argument") }
+            if let text = positional.first { request.text = text }
+            guard request.text != nil || (verb == "type" && !request.keys.isEmpty) else { throw Invalid("\(verb) requires text") }
+            if verb == "keys" { request.bytes = try unescape(request.text!) }
+        case "resize":
+            guard positional.count == 1 else { throw Invalid("resize requires COLSxROWS") }
+            let parts = positional[0].split(separator: "x", omittingEmptySubsequences: false)
+            guard parts.count == 2, let cols = Int(parts[0]), let rows = Int(parts[1]), (1...1000).contains(cols), (1...1000).contains(rows) else { throw Invalid("resize requires COLSxROWS, each 1...1000") }
+            request.columns = cols
+            request.rows = rows
+        default:
+            guard positional.isEmpty else { throw Invalid("unexpected argument: \(positional[0])") }
+        }
+        if verb == "wait" {
+            guard let pattern = request.text else { throw Invalid("wait requires --text REGEX") }
+            _ = try NSRegularExpression(pattern: pattern)
+        }
+        return request
+    }
+
+    static func http(_ target: String, body: Data) throws -> TermRequest {
+        guard let url = URLComponents(string: target) else { throw Invalid("invalid terminal URL") }
+        let verb = String(url.path.dropFirst())
+        let input: [String: Any]
+        if body.isEmpty { input = [:] }
+        else {
+            guard let object = try JSONSerialization.jsonObject(with: body) as? [String: Any] else { throw Invalid("expected a JSON object") }
+            input = object
+        }
+        var arguments = [verb]
+        let allowed = ["window", "pane", "text", "lines", "timeout", "columns", "rows", "keys", "delay_ms", "colors"]
+        guard input.keys.allSatisfy({ allowed.contains($0) }) else { throw Invalid("unknown terminal request field") }
+        var values = input
+        for item in url.queryItems ?? [] {
+            guard allowed.contains(item.name), item.name != "keys", item.name != "delay_ms", values[item.name] == nil, let value = item.value else { throw Invalid("invalid or repeated terminal query field: \(item.name)") }
+            values[item.name] = value
+        }
+        for key in ["window", "pane", "lines", "timeout"] {
+            if let value = values[key] { arguments += ["--" + key, String(describing: value)] }
+        }
+        if let colors = values["colors"] {
+            let flag: Bool
+            if let text = colors as? String, ["true", "false"].contains(text) { flag = text == "true" }
+            else if let value = colors as? NSNumber, CFGetTypeID(value) == CFBooleanGetTypeID() { flag = value.boolValue }
+            else { throw Invalid("colors must be true or false for screen") }
+            guard verb == "screen" else { throw Invalid("colors is only supported for screen") }
+            if flag { arguments.append("--colors") }
+        }
+        if verb == "resize" {
+            guard let columns = values["columns"], let rows = values["rows"] else { throw Invalid("resize requires columns and rows") }
+            arguments.append("\(columns)x\(rows)")
+        }
+        // HTTP streams the PNG; only the CLI needs a destination pathname.
+        if verb == "shot" { arguments += ["--", "http.png"] }
+        if let text = values["text"] {
+            guard let text = text as? String else { throw Invalid("text must be a string") }
+            arguments += verb == "wait" ? ["--text", text] : ["--", text]
+        }
+        // Key options precede '--' so literal input cannot be parsed as flags.
+        if let keys = values["keys"] {
+            guard verb == "type", let keys = keys as? [String] else { throw Invalid("keys must be a string array for type") }
+            arguments.insert(contentsOf: keys.flatMap { ["--key", $0] }, at: 1)
+        }
+        var request = try parse(arguments)
+        if let delays = values["delay_ms"] {
+            guard let delays = delays as? [Int] else { throw Invalid("delay_ms must be an integer array") }
+            request.delays = delays
+        }
+        request.json = true
+        return request
+    }
+
+    static func unescape(_ text: String) throws -> Data {
+        var bytes: [UInt8] = []
+        var iterator = text.utf8.makeIterator()
+        while let byte = iterator.next() {
+            if byte != 92 { bytes.append(byte); continue }
+            guard let escaped = iterator.next() else { throw Invalid("trailing backslash") }
+            switch escaped {
+            case 92: bytes.append(92)
+            case 101: bytes.append(27)
+            case 110: bytes.append(10)
+            case 114: bytes.append(13)
+            case 116: bytes.append(9)
+            case 120:
+                guard let a = iterator.next(), let b = iterator.next(), let value = UInt8(String(bytes: [a, b], encoding: .ascii) ?? "", radix: 16) else { throw Invalid("expected \\xHH") }
+                bytes.append(value)
+            default: throw Invalid("unknown byte escape")
+            }
+        }
+        return Data(bytes)
+    }
+}
+
+#if os(iOS)
+@objc protocol TermControlWire {
+    func terminal(_ request: Data, reply: @escaping (Int, Data, String) -> Void)
+}
+#endif
+
+struct TermResponse: Sendable {
+    var status: Int
+    var data: Data
+    var contentType = "application/json; charset=utf-8"
+    init(_ value: [String: Any]) { self.init(200, value) }
+    init(_ status: Int, _ value: [String: Any]) {
+        self.status = status
+        self.data = (try? JSONSerialization.data(withJSONObject: value, options: .sortedKeys)) ?? Data()
+    }
+    init(status: Int, data: Data, contentType: String = "application/json; charset=utf-8") {
+        self.status = status
+        self.data = data
+        self.contentType = contentType
+    }
+    static func error(_ status: Int, _ message: String) -> TermResponse { TermResponse(status, ["error": message]) }
+
+    func output(for request: TermRequest) -> Data {
+        if request.json || contentType == "image/png" { return data + (contentType == "image/png" ? Data() : Data([10])) }
+        guard let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return data }
+        let text: String
+        if let error = value["error"] as? String { text = error }
+        else if let rows = value["rows"] as? [String] { text = rows.joined(separator: "\n") }
+        else if let history = value["text"] as? String { text = history }
+        else if request.verb == "size" { text = "\(value["columns"] ?? 0)x\(value["height"] ?? 0)" }
+        else { text = String(data: data, encoding: .utf8) ?? "" }
+        return Data((text + "\n").utf8)
+    }
+}
+
+enum TermCommand {
+    // The real command entry captures its thread-local streams before hopping to UIKit.
+    static func run(_ arguments: [String], perform: (TermRequest, @escaping (TermResponse) -> Void) -> Void, write: (Data, Bool) -> Void) -> Int32 {
+        if arguments == ["--help"] || arguments == ["-h"] {
+            write(Data((TermRequest.help + "\n").utf8), false)
+            return 0
+        }
+        do {
+            let request = try TermRequest.parse(arguments)
+            let semaphore = DispatchSemaphore(value: 0)
+            let lock = NSLock()
+            var response: TermResponse?
+            perform(request) { result in
+                lock.lock()
+                defer { lock.unlock() }
+                guard response == nil else { return }
+                response = result
+                semaphore.signal()
+            }
+            guard semaphore.wait(timeout: .now() + (request.verb == "wait" ? request.timeout : 10) + 15) == .success else {
+                write(TermResponse.error(503, "terminal service did not reply").output(for: request), true)
+                return 1
+            }
+            guard let response else { return 1 }
+            if request.verb == "shot", response.status == 200 {
+                try response.data.write(to: URL(fileURLWithPath: request.text!), options: .atomic)
+                if request.json { write(TermResponse(["path": request.text!, "bytes": response.data.count]).data + Data([10]), false) }
+            } else {
+                write(response.output(for: request), response.status != 200)
+            }
+            return response.status == 200 ? 0 : response.status == 408 ? 124 : 1
+        } catch {
+            write(Data(("term: \(error.localizedDescription)\n").utf8), true)
+            return 2
+        }
+    }
+}
+import Foundation
+
+#if HERDR_EMBEDDED
+@_silgen_name("herdr_ios_terminal_json")
+private func herdrTerminalJSON(_ input: UnsafePointer<CChar>) -> UnsafeMutablePointer<CChar>?
+@_silgen_name("herdr_ios_terminal_free")
+private func herdrTerminalFree(_ value: UnsafeMutablePointer<CChar>)
+#endif
+
+enum TermPane {
+    static func perform(_ request: TermRequest, reply: @escaping (TermResponse) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            #if HERDR_EMBEDDED
+            do {
+                func call(_ method: String, _ params: [String: Any]) throws -> [String: Any] {
+                    let data = try JSONSerialization.data(withJSONObject: ["id": UUID().uuidString, "method": method, "params": params])
+                    let text = String(decoding: data, as: UTF8.self)
+                    guard let pointer = text.withCString({ herdrTerminalJSON($0) }) else { throw TermRequest.Invalid("Herdr returned no terminal response") }
+                    defer { herdrTerminalFree(pointer) }
+                    let value = try JSONSerialization.jsonObject(with: Data(String(cString: pointer).utf8)) as? [String: Any] ?? [:]
+                    if let error = value["error"] as? [String: Any] {
+                        if error["code"] as? String == "timeout" { throw PaneTimeout() }
+                        throw TermRequest.Invalid(error["message"] as? String ?? "Herdr terminal request failed")
+                    }
+                    guard let result = value["result"] as? [String: Any] else { throw TermRequest.Invalid("invalid Herdr terminal response") }
+                    return result
+                }
+                if request.verb == "panes" { reply(TermResponse(try call("pane.list", [:]))); return }
+                guard let pane = request.pane else { throw TermRequest.Invalid("select --pane ID from term panes") }
+                var params: [String: Any] = ["pane": pane, "verb": request.verb, "keys": request.keys.map { key in
+                    ["ctrl-c": "ctrl+c", "pgdn": "pagedown", "pgup": "pageup", "esc": "escape"][key.lowercased()] ?? key
+                }]
+                if let text = request.text { params["text"] = text }
+                if let bytes = request.bytes { params["bytes"] = Array(bytes) }
+                if let lines = request.lines { params["lines"] = lines }
+                if let cols = request.columns { params["columns"] = cols }
+                if let rows = request.rows { params["height"] = rows }
+                if request.verb == "wait" {
+                    _ = try call("pane.wait_for_output", ["pane_id": pane, "source": "visible", "match": ["type": "regex", "value": request.text ?? ""], "timeout_ms": Int(request.timeout * 1000)])
+                    params["verb"] = "screen"
+                }
+                if request.verb == "type" {
+                    let delays = request.delays.isEmpty ? Array(repeating: 0, count: request.keys.count) : request.delays
+                    guard delays.count == request.keys.count, request.keys.count <= 256, delays.allSatisfy({ (0...2000).contains($0) }), delays.reduce(0, +) <= 10000 else { throw TermRequest.Invalid("invalid key delays") }
+                    // Validate the entire sequence before sending its text.
+                    var validation = params
+                    validation["verb"] = "validate"
+                    _ = try call("terminal.control", validation)
+                    let keys = params["keys"] as? [String] ?? []
+                    params["keys"] = [String]()
+                    _ = try call("terminal.control", params)
+                    params.removeValue(forKey: "text")
+                    for (index, key) in keys.enumerated() {
+                        if delays[index] > 0 { Thread.sleep(forTimeInterval: Double(delays[index]) / 1000) }
+                        params["keys"] = [key]
+                        _ = try call("terminal.control", params)
+                    }
+                    params["verb"] = "screen"
+                }
+                reply(TermResponse(try call("terminal.control", params)))
+            } catch is PaneTimeout { reply(.error(408, "screen wait timed out")) }
+            catch { reply(.error(409, error.localizedDescription)) }
+            #else
+            reply(.error(501, "Herdr is not embedded in this build"))
+            #endif
+        }
+    }
+
+    private struct PaneTimeout: Error {}
+}
+import UIKit
+import SwiftTerm
+import ios_system
+
+// Main-thread ownership matches UIKit keyboard input and terminal output.
+final class TermTerminal {
+    static let shared = TermTerminal()
+    private var typing: Set<String> = []
+    private var screens: [String: Data] = [:]
+    private var sequences: [String: UInt64] = [:]
+
+    private func scenes() -> [SceneDelegate] {
+        UIApplication.shared.connectedScenes.compactMap { $0.delegate as? SceneDelegate }.filter { $0.terminalView != nil }
+    }
+
+    private func connected(_ scene: SceneDelegate, _ view: TerminalView) -> Bool {
+        scenes().contains { $0 === scene } && scene.terminalView === view
+    }
+
+    private func visible(_ scene: SceneDelegate) -> Bool {
+        guard let window = scene.terminalView?.window, !window.isHidden, window.alpha > 0 else { return false }
+        return window.windowScene?.activationState == .foregroundActive || window.windowScene?.activationState == .foregroundInactive
+    }
+
+    func scene(window: String? = nil) -> SceneDelegate? {
+        let terminals = scenes()
+        let candidates: [SceneDelegate]
+        if let window {
+            candidates = terminals.filter { $0.persistentIdentifier == window }
+        } else if terminals.count == 1 {
+            candidates = terminals
+        } else {
+            candidates = terminals.filter { visible($0) }
+        }
+        return candidates.count == 1 ? candidates.first : nil
+    }
+
+    func perform(_ request: TermRequest, reply: @escaping (TermResponse) -> Void) {
+        precondition(Thread.isMainThread)
+        if request.verb == "windows" {
+            reply(TermResponse(["windows": scenes().map { scene -> [String: Any] in
+                ["window": scene.persistentIdentifier ?? "", "foreground": visible(scene), "active": scene.terminalView?.window?.windowScene?.activationState == .foregroundActive, "command": scene.currentCommand]
+            }]))
+            return
+        }
+        let terminals = scenes()
+        guard let scene = scene(window: request.window), let view = scene.terminalView else {
+            if request.window == nil, !terminals.isEmpty {
+                reply(TermResponse(409, ["error": "ambiguous terminal; select --window ID", "windows": terminals.map { $0.persistentIdentifier ?? "" }]))
+            } else {
+                reply(.error(503, "no connected terminal for the selected window"))
+            }
+            return
+        }
+        if request.verb == "shot", !visible(scene) {
+            reply(.error(503, "background terminal screenshot unavailable: UIKit view rendering requires a foreground scene"))
+            return
+        }
+        if request.pane != nil || request.verb == "panes" {
+            guard scene.currentCommand.hasPrefix("herdr") else { reply(.error(409, "selected window is not running Herdr")); return }
+            let identity = "\(scene.persistentIdentifier ?? "")/\(request.pane ?? "")"
+            let sendsInput = ["type", "keys", "paste"].contains(request.verb)
+            if sendsInput {
+                guard !typing.contains(identity) else { reply(.error(409, "a key sequence is already running for this pane")); return }
+                typing.insert(identity)
+            }
+            TermPane.perform(request) { response in
+                DispatchQueue.main.async {
+                    if sendsInput { self.typing.remove(identity) }
+                    guard self.connected(scene, view) else { reply(.error(503, "target terminal disconnected")); return }
+                    if request.verb == "shot", response.status == 200 {
+                        guard self.visible(scene) else { reply(.error(503, "background terminal screenshot unavailable: UIKit view rendering requires a foreground scene")); return }
+                        reply(self.paneImage(response, view))
+                    } else if request.verb == "state", response.status == 200, var value = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any] {
+                        value["foreground"] = self.visible(scene)
+                        value["active"] = view.window?.windowScene?.activationState == .foregroundActive
+                        value["window"] = scene.persistentIdentifier ?? ""
+                        reply(TermResponse(value))
+                    } else { reply(response) }
+                }
+            }
+            return
+        }
+        let terminal = view.getTerminal()
+        switch request.verb {
+        case "screen": reply(snapshot(scene, view, colors: request.colors))
+        case "scrollback":
+            let last = terminal.buffer.yDisp + terminal.rows
+            let first = max(0, last - (request.lines ?? last))
+            let rows = (first..<last).map { terminal.getScrollInvariantLine(row: terminal.buffer.totalLinesTrimmed + $0)?.translateToString(trimRight: true).replacingOccurrences(of: "\u{0}", with: " ") ?? "" }
+            reply(TermResponse(["rows": rows, "window": scene.persistentIdentifier ?? ""]))
+        case "size": reply(TermResponse(["columns": terminal.cols, "height": terminal.rows]))
+        case "cursor":
+            let cursor = terminal.getCursorLocation()
+            reply(TermResponse(["row": cursor.y, "column": cursor.x]))
+        case "state":
+            reply(TermResponse(["foreground": visible(scene), "active": view.window?.windowScene?.activationState == .foregroundActive, "command": scene.currentCommand, "pid": scene.pid, "pid_kind": "ios_system session", "window": scene.persistentIdentifier ?? ""]))
+        case "resize":
+            guard let cols = request.columns, let rows = request.rows else { reply(.error(400, "resize requires geometry")); return }
+            terminal.resize(cols: cols, rows: rows)
+            scene.sizeChanged(source: view, newCols: cols, newRows: rows)
+            reply(TermResponse(["columns": terminal.cols, "height": terminal.rows]))
+        case "clear":
+            view.feed(text: "\u{1b}[H\u{1b}[2J")
+            reply(snapshot(scene, view))
+        case "shot":
+            view.layoutIfNeeded()
+            let image = UIGraphicsImageRenderer(bounds: view.bounds).image { context in view.layer.render(in: context.cgContext) }
+            guard let bytes = image.pngData() else { reply(.error(500, "PNG encoding failed")); return }
+            reply(TermResponse(status: 200, data: bytes, contentType: "image/png"))
+        case "wait": wait(request, scene, view, reply: reply)
+        case "type", "keys", "paste": type(request, scene, view, reply: reply)
+        default: reply(.error(400, "unknown terminal operation"))
+        }
+    }
+
+    private func paneImage(_ response: TermResponse, _ view: TerminalView) -> TermResponse {
+        guard let value = try? JSONSerialization.jsonObject(with: response.data) as? [String: Any], let cells = value["cells"] as? [[[String: Any]]], let columns = value["columns"] as? Int, let rows = value["height"] as? Int else { return .error(500, "invalid rendered pane") }
+        let font = view.font
+        let cellWidth = ("M" as NSString).size(withAttributes: [.font: font]).width
+        let cellHeight = font.lineHeight
+        let bounds = CGRect(x: 0, y: 0, width: CGFloat(columns) * cellWidth, height: CGFloat(rows) * cellHeight)
+        let image = UIGraphicsImageRenderer(bounds: bounds).image { _ in
+            view.nativeBackgroundColor.setFill()
+            UIRectFill(bounds)
+            for (row, line) in cells.enumerated() {
+                for (column, cell) in line.enumerated() {
+                    let rect = CGRect(x: CGFloat(column) * cellWidth, y: CGFloat(row) * cellHeight, width: cellWidth, height: cellHeight)
+                    Self.color(cell["background"] as? String, fallback: view.nativeBackgroundColor).setFill()
+                    UIRectFill(rect)
+                }
+            }
+            // Paint all backgrounds before glyphs so a wide glyph survives its
+            // following display cell; UIKit shapes combining characters together.
+            for (row, line) in cells.enumerated() {
+                for (column, cell) in line.enumerated() {
+                    var traits: UIFontDescriptor.SymbolicTraits = []
+                    if cell["bold"] as? Bool == true { traits.insert(.traitBold) }
+                    if cell["italic"] as? Bool == true { traits.insert(.traitItalic) }
+                    let styled = font.fontDescriptor.withSymbolicTraits(traits).map { UIFont(descriptor: $0, size: font.pointSize) } ?? font
+                    var foreground = Self.color(cell["foreground"] as? String, fallback: view.nativeForegroundColor)
+                    if cell["dim"] as? Bool == true { foreground = foreground.withAlphaComponent(0.5) }
+                    var attributes: [NSAttributedString.Key: Any] = [.font: styled, .foregroundColor: foreground]
+                    if cell["underline"] as? Bool == true { attributes[.underlineStyle] = NSUnderlineStyle.single.rawValue }
+                    if cell["strike"] as? Bool == true { attributes[.strikethroughStyle] = NSUnderlineStyle.single.rawValue }
+                    (cell["text"] as? String ?? " ").draw(at: CGPoint(x: CGFloat(column) * cellWidth, y: CGFloat(row) * cellHeight), withAttributes: attributes)
+                }
+            }
+            if let cursor = value["cursor"] as? [String: Any], cursor["visible"] as? Bool == true, let column = cursor["column"] as? Int, let row = cursor["row"] as? Int {
+                view.caretColor.setStroke()
+                UIRectFrame(CGRect(x: CGFloat(column) * cellWidth, y: CGFloat(row) * cellHeight, width: cellWidth, height: cellHeight))
+            }
+        }
+        guard let png = image.pngData() else { return .error(500, "PNG encoding failed") }
+        return TermResponse(status: 200, data: png, contentType: "image/png")
+    }
+
+    private static func color(_ name: String?, fallback: UIColor) -> UIColor {
+        guard let name else { return fallback }
+        if name.hasPrefix("#"), let value = UInt32(name.dropFirst(), radix: 16) {
+            return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
+        }
+        let colors: [String: UIColor] = ["Black": .black, "Red": .red, "Green": .green, "Yellow": .yellow, "Blue": .blue, "Magenta": .magenta, "Cyan": .cyan, "Gray": .lightGray, "DarkGray": .darkGray, "White": .white]
+        return colors[name] ?? fallback
+    }
+
+    private func snapshot(_ scene: SceneDelegate, _ view: TerminalView, colors: Bool = false) -> TermResponse {
+        let terminal = view.getTerminal()
+        let rows = (0..<terminal.rows).map { terminal.getLine(row: $0)?.translateToString(trimRight: true).replacingOccurrences(of: "\u{0}", with: " ") ?? "" }
+        let cursor = terminal.getCursorLocation()
+        let cells: [[Any]] = (0..<terminal.rows).map { row in
+            (0..<terminal.cols).map { column -> Any in
+                let text = terminal.getCharacter(col: column, row: row).map { $0 == "\0" ? " " : String($0) } ?? " "
+                guard colors, let cell = terminal.getCharData(col: column, row: row) else { return text }
+                let attribute = cell.attribute
+                let style = attribute.style
+                return ["text": text, "foreground": Self.cellColor(attribute.fg), "background": Self.cellColor(attribute.bg),
+                    "bold": style.contains(.bold), "italic": style.contains(.italic), "dim": style.contains(.dim),
+                    "underline": style.contains(.underline) || attribute.underlineStyle != .none, "strike": style.contains(.crossedOut),
+                    "inverse": style.contains(.inverse), "invisible": style.contains(.invisible), "blink": style.contains(.blink)] as [String: Any]
+            }
+        }
+        let window = scene.persistentIdentifier ?? ""
+        var value: [String: Any] = ["rows": rows, "cells": cells, "columns": terminal.cols, "height": terminal.rows, "cursor": ["row": cursor.y, "column": cursor.x], "window": window, "pane": "main"]
+        let content = TermResponse(value).data
+        if screens[window] != content {
+            screens[window] = content
+            sequences[window, default: 0] += 1
+        }
+        value["seq"] = sequences[window, default: 0]
+        return TermResponse(value)
+    }
+
+    private static func cellColor(_ color: Attribute.Color) -> String {
+        switch color {
+        case .ansi256(let code): return String(code)
+        case .trueColor(let red, let green, let blue): return String(format: "#%02X%02X%02X", Int(red), Int(green), Int(blue))
+        case .defaultColor, .defaultInvertedColor: return "Reset"
+        }
+    }
+
+    private func type(_ request: TermRequest, _ scene: SceneDelegate, _ view: TerminalView, reply: @escaping (TermResponse) -> Void) {
+        let identity = scene.persistentIdentifier ?? ""
+        let keys = request.keys
+        let delays = request.delays.isEmpty ? Array(repeating: 0, count: keys.count) : request.delays
+        guard keys.count <= 256, delays.count == keys.count, delays.allSatisfy({ (0...2000).contains($0) }), delays.reduce(0, +) <= 10000 else {
+            reply(.error(400, "delay_ms must match keys, each 0...2000 ms, total <=10000 ms, at most 256 keys")); return
+        }
+        let aliases = ["pgdn": "pagedown", "pgup": "pageup"]
+        let normalized = keys.map { aliases[$0.lowercased()] ?? $0 }
+        for key in normalized where view.getTerminal().encodeKeyboardKey(key, backspaceSendsControlH: view.backspaceSendsControlH) == nil {
+            reply(.error(400, "unknown or unrepresentable key: \(key)")); return
+        }
+        guard !typing.contains(identity) else { reply(.error(409, "a key sequence is already running for this window")); return }
+        typing.insert(identity)
+        if request.verb == "keys" {
+            let bytes = Array(request.bytes ?? Data((request.text ?? "").utf8))
+            view.send(data: bytes[...])
+        } else if request.verb == "paste" {
+            let terminal = view.getTerminal()
+            if terminal.bracketedPasteMode { view.send(data: Array("\u{1b}[200~".utf8)[...]) }
+            view.send(data: Array((request.text ?? "").utf8)[...])
+            if terminal.bracketedPasteMode { view.send(data: Array("\u{1b}[201~".utf8)[...]) }
+        } else if let text = request.text {
+            // The shell line editor recognizes Return only as a separate input.
+            for character in text { view.insertText(String(character)) }
+        }
+        func step(_ index: Int) {
+            guard self.connected(scene, view) else {
+                self.typing.remove(identity)
+                reply(.error(409, "target terminal disconnected")); return
+            }
+            if index == normalized.count {
+                self.typing.remove(identity)
+                reply(self.snapshot(scene, view)); return
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(delays[index])) {
+                guard self.connected(scene, view), let bytes = view.getTerminal().encodeKeyboardKey(normalized[index], backspaceSendsControlH: view.backspaceSendsControlH) else {
+                    self.typing.remove(identity)
+                    reply(.error(409, "target terminal or key mode changed")); return
+                }
+                if normalized[index].lowercased() == "enter", view.getTerminal().keyboardEnhancementFlags.isEmpty { view.insertText("\n") }
+                else { view.send(data: bytes[...]) }
+                step(index + 1)
+            }
+        }
+        step(0)
+    }
+
+    private func wait(_ request: TermRequest, _ scene: SceneDelegate, _ view: TerminalView, reply: @escaping (TermResponse) -> Void) {
+        guard let pattern = request.text, let regex = try? NSRegularExpression(pattern: pattern) else { reply(.error(400, "invalid --text regular expression")); return }
+        var observer: NSObjectProtocol?
+        var disconnectObserver: NSObjectProtocol?
+        var finished = false
+        var timeout: DispatchWorkItem?
+        func complete(_ response: TermResponse) {
+            guard !finished else { return }
+            finished = true
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+            if let disconnectObserver { NotificationCenter.default.removeObserver(disconnectObserver) }
+            timeout?.cancel()
+            reply(response)
+        }
+        func check() {
+            guard self.connected(scene, view) else { complete(.error(503, "target terminal disconnected")); return }
+            let snapshot = self.snapshot(scene, view)
+            let object = try? JSONSerialization.jsonObject(with: snapshot.data) as? [String: Any]
+            let text = (object?["rows"] as? [String] ?? []).joined(separator: "\n")
+            if regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil { complete(snapshot) }
+        }
+        observer = NotificationCenter.default.addObserver(forName: Notification.Name("AShellTerminalOutput"), object: view.getTerminal(), queue: .main) { _ in check() }
+        disconnectObserver = NotificationCenter.default.addObserver(forName: UIScene.didDisconnectNotification, object: view.window?.windowScene, queue: .main) { _ in check() }
+        timeout = DispatchWorkItem { complete(.error(408, "screen wait timed out")) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + request.timeout, execute: timeout!)
+        check()
+    }
+}
+
+final class TermControlService: NSObject, TermControlWire {
+    static let shared = TermControlService()
+    func terminal(_ data: Data, reply: @escaping (Int, Data, String) -> Void) {
+        do {
+            let request = try JSONDecoder().decode(TermRequest.self, from: data)
+            DispatchQueue.main.async {
+                TermTerminal.shared.perform(request) { result in reply(result.status, result.data, result.contentType) }
+            }
+        } catch { reply(400, Data(error.localizedDescription.utf8), "text/plain; charset=utf-8") }
+    }
+}
+
+@_cdecl("ashell_term")
+public func ashellTerm(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?) -> Int32 {
+    guard argc > 0, let argv else { return 2 }
+    guard !Thread.isMainThread else { return 1 }
+    let arguments = (1..<Int(argc)).map { String(cString: argv[$0]!) }
+    // ios_system streams belong to this command thread, never the UI callback.
+    let output = thread_stdout
+    let error = thread_stderr
+    return TermCommand.run(arguments, perform: { request, reply in
+        DispatchQueue.main.async { TermTerminal.shared.perform(request, reply: reply) }
+    }, write: { bytes, failed in
+        guard let stream = failed ? error : output else { return }
+        bytes.withUnsafeBytes { buffer in
+            if let address = buffer.baseAddress { _ = fwrite(address, 1, buffer.count, stream) }
+        }
+        fflush(stream)
+    })
 }

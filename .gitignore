@@ -92,3 +92,6 @@ Resources/npm/
 Resources/node-fetch/
 /fzf/fzf.xcframework/
 /navi/navi.xcframework/
+
+# Local private phone integration inputs
+.phone-cache/
