@@ -7,6 +7,8 @@
 #include <dirent.h>
 #include <fcntl.h>
 #include <locale.h>
+#include <signal.h>
+#undef kill
 
 // ios_system discovers these stock host callbacks with dlsym. Each extension
 // owns one shell; its socket already carries input directly to the command.
@@ -168,6 +170,14 @@ static int check_documents_write(NSURL *documents, NSString *probe) {
     _pane = NULL;
     for (NSURL *directory in _directories) [directory stopAccessingSecurityScopedResource];
     _directories = nil;
+}
+- (void)terminate:(void (^)(void))reply {
+    // AppExtensionProcess.invalidate releases the host's assertion but permits
+    // process reuse. End this dedicated worker even if its command ignores EOF.
+    // ios_system interposes exit/_exit; SIGKILL reaches the OS process directly.
+    // Do not acknowledge before death: the host's synchronous XPC call returns
+    // through its error handler only after the old worker can no longer run.
+    kill(getpid(), SIGKILL);
 }
 - (void)dealloc { [self releasePane]; }
 @end

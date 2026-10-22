@@ -9,6 +9,7 @@
 - (void)closeInput:(void (^)(int))reply;
 - (void)interrupt:(void (^)(int))reply;
 - (void)releasePane;
+- (void)terminate:(void (^)(void))reply;
 @end
 
 NSObject<HerdrPaneWire> *herdr_worker_service(void);

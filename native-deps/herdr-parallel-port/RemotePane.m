@@ -8,6 +8,7 @@
 
 extern void herdr_extension_connect(void (^)(NSXPCConnection *, NSError *));
 extern void herdr_extension_disconnect(NSXPCConnection *);
+extern void herdr_extension_observe(NSXPCConnection *, pid_t);
 
 static void log_host_library(const char *phase) {
     int saved = errno;
@@ -110,6 +111,7 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols, unsign
         for (size_t i = 0; envp && envp[i]; i++) [env addObject:@(envp[i])];
         __block int fd = -1;
         [pane.proxy spawn:@(command) cwd:cwdBookmark home:homeBookmark documents:documentsBookmark probe:pane.probeDirectory env:env cols:cols rows:rows reply:^(int code, NSFileHandle *handle, int pid) {
+            herdr_extension_observe(pane.connection, pid);
             error = code;
             if (!code && !handle) error = EPROTO;
             if (!error) {
@@ -121,7 +123,12 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols, unsign
         }];
         if (rmdir(pane.probeDirectory.fileSystemRepresentation) == 0) pane.probeDirectory = nil;
         if (!error && fd < 0) error = EPROTO;
-        if (error) { herdr_extension_disconnect(pane.connection); return error; }
+        if (error) {
+            int spawnError = error;
+            [pane.proxy terminate:^{}];
+            herdr_extension_disconnect(pane.connection);
+            return spawnError;
+        }
         *fd_out = fd;
         *job_out = (__bridge_retained void *)pane;
         return 0;
@@ -174,6 +181,7 @@ int herdr_pane_cancel(void *job) {
     RemotePane *pane = (__bridge RemotePane *)job;
     if (!pane) return EINVAL;
     pane.interrupted = YES;
+    [pane.proxy terminate:^{}];
     herdr_extension_disconnect(pane.connection);
     return 0;
 }
@@ -181,5 +189,6 @@ void herdr_pane_release(void *job) {
     if (!job) return;
     RemotePane *pane = (__bridge_transfer RemotePane *)job;
     [pane.proxy releasePane];
+    [pane.proxy terminate:^{}];
     herdr_extension_disconnect(pane.connection);
 }
