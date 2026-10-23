@@ -1,0 +1,19 @@
+--- a/configure
++++ b/configure
+@@ -259,7 +259,15 @@
+     exit 1
+   fi
+   if compile -Werror -o "o/tool/config/${PROGRAM}" "tool/config/${PROGRAM}.c" &&
+-     run "o/tool/config/${RUNPROGRAM}"; then
++     { if [ "${CROSS_COMPILE:-}" = 1 ]; then
++         # These probes require runtime behavior, not SDK availability.
++         case "$PROGRAM" in
++           dev_urandom|sendto_zero|pthread_process_shared) false ;;
++           *) true ;;
++         esac
++       else
++         run "o/tool/config/${RUNPROGRAM}"
++       fi; }; then
+     printf '%s\n' "${MESSAGE} yes" >&2
+     if [ $# -gt 0 ]; then
+       "$@"

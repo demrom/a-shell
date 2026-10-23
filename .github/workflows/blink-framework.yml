@@ -1,0 +1,83 @@
+name: Blink xcframework CI
+on:
+  pull_request:
+    paths:
+      - 'ci/blink*'
+      - 'ci/audit-artifact.py'
+      - '.github/workflows/blink-framework.yml'
+  workflow_dispatch:
+  push:
+    branches:
+      - 'ci/blink-xcframework'
+    tags:
+      - 'blink-v*'
+permissions:
+  contents: read
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+defaults:
+  run:
+    shell: bash
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v7
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          xcrun --sdk iphoneos --show-sdk-version
+          xcrun --sdk iphonesimulator --show-sdk-version
+          brew list make >/dev/null 2>&1 || brew install make
+          gmake --version
+          df -h .
+      - name: Build pinned Blink
+        run: nice -n 15 bash ci/blink-frameworks.sh
+      - name: Audit final artifact
+        run: |
+          set -euo pipefail
+          test -s .build/release.md
+          zips=(.build/*.xcframework.zip)
+          test "${#zips[@]}" = 1
+          test "${zips[0]}" = .build/blink.xcframework.zip
+          sum=$(swift package compute-checksum .build/blink.xcframework.zip)
+          printf '%s  blink.xcframework.zip\n' "$sum" > .build/checksums.txt
+          uv run ci/audit-artifact.py .build/blink.xcframework.zip --sha256 "$sum" --max-minos 14.0 > .build/blink.audit.json
+      - uses: actions/upload-artifact@v7
+        with:
+          name: blink-xcframework
+          include-hidden-files: true
+          if-no-files-found: error
+          path: |
+            .build/blink.xcframework.zip
+            .build/blink.audit.json
+            .build/checksums.txt
+            .build/release.md
+  release:
+    needs: build
+    if: github.repository == 'holzschu/a-shell' && startsWith(github.ref, 'refs/tags/blink-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: blink-xcframework
+          path: dist
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          cd dist
+          shasum -a 256 -c checksums.txt
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" blink.xcframework.zip checksums.txt
+          else
+            gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
+              --title "Blink $GITHUB_REF_NAME" --notes-file release.md blink.xcframework.zip checksums.txt
+          fi
