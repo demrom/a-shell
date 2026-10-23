@@ -10,6 +10,102 @@ import SwiftUI
 import SwiftTerm
 import WebKit
 
+struct ServiceIndicator: Identifiable {
+    let id: String
+    let color: SwiftUI.Color
+    let title: String
+    let details: [String]
+    var stop: (() -> Void)? = nil
+}
+
+final class ServiceIndicators: ObservableObject {
+    static let shared = ServiceIndicators()
+    @Published private(set) var items: [ServiceIndicator] = []
+
+    func set(_ item: ServiceIndicator) {
+        DispatchQueue.main.async {
+            self.items.removeAll { $0.id == item.id }
+            self.items.append(item)
+            self.items.sort { $0.id < $1.id }
+        }
+    }
+
+    func remove(id: String) {
+        DispatchQueue.main.async { self.items.removeAll { $0.id == id } }
+    }
+}
+
+struct ServiceIndicatorDots: View {
+    let items: [ServiceIndicator]
+    let background: SwiftUI.Color
+    let foreground: SwiftUI.Color
+    let accent: SwiftUI.Color
+    @State private var showingDetails = false
+
+    var body: some View {
+        Button {
+            showingDetails = true
+        } label: {
+            HStack(spacing: 8) {
+                ForEach(items) { item in
+                    Circle()
+                        .fill(item.color)
+                        .overlay(Circle().stroke(foreground.opacity(0.7), lineWidth: 0.5))
+                        .frame(width: 8, height: 8)
+                }
+            }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Running services")
+        .accessibilityValue(items.map(\.title).joined(separator: ", "))
+        .accessibilityIdentifier("service-indicators")
+        .popover(isPresented: $showingDetails) {
+            details
+        }
+        .onChange(of: items.map(\.id)) { ids in
+            if ids.isEmpty { showingDetails = false }
+        }
+    }
+
+    @ViewBuilder private var details: some View {
+        let content = VStack(alignment: .leading, spacing: 16) {
+            ForEach(items) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    Label {
+                        Text(item.title).font(.headline)
+                    } icon: {
+                        Circle().fill(item.color).frame(width: 8, height: 8)
+                    }
+                    ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.subheadline).textSelection(.enabled)
+                    }
+                    if let stop = item.stop {
+                        Button("Stop " + item.title, role: .destructive) {
+                            stop()
+                        }
+                        .foregroundColor(accent)
+                        .accessibilityIdentifier("service-stop-" + item.id)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(idealWidth: 280, maxWidth: 320, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .foregroundColor(foreground)
+        .background(background)
+        .tint(accent)
+        if #available(iOS 16.4, *) {
+            content.presentationCompactAdaptation(.popover).presentationBackground(background)
+        } else {
+            content
+        }
+    }
+}
+
 // SwiftUI extension for fullscreen rendering
 public enum ViewBehavior: Int {
     case original
@@ -211,7 +307,10 @@ public var terminalViewHeight = 80
 private let edgeSwipeTarget = EdgeSwipeTarget()
 
 struct ContentView: View {
-    @ObservedObject private var relay = Relay.shared
+    @ObservedObject private var services = ServiceIndicators.shared
+    @State private var serviceBackground = UIColor.systemBackground
+    @State private var serviceForeground = UIColor.label
+    @State private var serviceAccent = UIColor.link
     @State private var keyboardHeight: CGFloat = 0
     @State private var lastKeyboardHeight: CGFloat = 0
     @State private var frameHeight: CGFloat = 0
@@ -434,27 +533,26 @@ struct ContentView: View {
         .if(!(localShowWebView && showWebView)) {
             $0.ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .overlay(Group {
-            if let connections = relay.indicatorConnections {
-                HStack(spacing: 3) {
-                    Circle()
-                        .fill(connections > 0 || relay.indicatorRecent ? Color.green : Color.yellow)
-                        .frame(width: 8, height: 8)
-                        .overlay(Circle().stroke(Color.primary.opacity(0.6), lineWidth: 0.5))
-                    if connections > 0 {
-                        Text("\(connections)")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundColor(.primary)
-                    }
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !services.items.isEmpty {
+                HStack {
+                    Spacer()
+                    ServiceIndicatorDots(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent))
                 }
-                .padding(.top, 2)
-                .padding(.trailing, 8)
-                .offset(y: -12)
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(connections > 0 ? "Relay connections: \(connections)" : (relay.indicatorRecent ? "Relay recently connected" : "Relay listening"))
-                .allowsHitTesting(false)
+                .padding(.trailing, 4)
+                .background(Color(uiColor: serviceBackground))
             }
-        }, alignment: .topTrailing)
+        }
+        .onAppear { updateServiceTheme() }
+        .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
+            updateServiceTheme()
+        }
+    }
+
+    private func updateServiceTheme() {
+        serviceBackground = terminalview.view.nativeBackgroundColor
+        serviceForeground = terminalview.view.nativeForegroundColor
+        serviceAccent = terminalview.view.caretColor
     }
 }
 

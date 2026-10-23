@@ -539,6 +539,7 @@ final class RelayServer {
 #if os(iOS)
 import ios_system
 import Combine
+import SwiftUI
 
 final class Relay: ObservableObject {
     static let shared = Relay()
@@ -680,6 +681,8 @@ final class Relay: ObservableObject {
     }
 
     private func updateIndicator(_ connections: Int?) {
+        let endpoint = server.map { "\($0.configuration.bind):\($0.port ?? $0.configuration.port)" }
+        let mutualTLS = server?.configuration.mutualTLS ?? true
         DispatchQueue.main.async { [self] in
             guard self.indicatorConnections != connections else { return }
             self.indicatorReset?.cancel()
@@ -687,13 +690,32 @@ final class Relay: ObservableObject {
             if let connections {
                 if connections > 0 { self.indicatorRecent = true }
                 else if self.indicatorRecent {
-                    let reset = DispatchWorkItem { [weak self] in self?.indicatorRecent = false }
+                    let reset = DispatchWorkItem { [weak self] in
+                        self?.indicatorRecent = false
+                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS)
+                    }
                     self.indicatorReset = reset
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: reset)
                 }
             } else { self.indicatorRecent = false }
             self.indicatorConnections = connections
+            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS)
         }
+    }
+
+    private func publishIndicator(endpoint: String?, mutualTLS: Bool) {
+        guard let connections = indicatorConnections else {
+            ServiceIndicators.shared.remove(id: "relay")
+            return
+        }
+        ServiceIndicators.shared.set(ServiceIndicator(id: "relay", color: connections > 0 || indicatorRecent ? .green : .yellow, title: "Relay", details: [
+            "State: listening",
+            "Address: \(endpoint ?? "starting")",
+            "Connected clients: \(connections)",
+            "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
+        ], stop: { [weak self] in
+            DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
+        }))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
