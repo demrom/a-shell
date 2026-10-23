@@ -9,16 +9,20 @@ permissions:
 
 jobs:
   build:
-    name: a-Shell-noPython (${{ matrix.platform }})
+    name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
+        scheme: [a-Shell-noPython, a-Shell-mini, a-Shell]
+        target: [device, simulator]
         include:
-          - platform: iOS
+          - target: device
+            platform: iOS
             arch: arm64
-          - platform: iOS Simulator
+          - target: simulator
+            platform: iOS Simulator
             arch: x86_64
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
@@ -40,11 +44,12 @@ jobs:
         run: nice -n 15 ./downloadFrameworks.sh --jobs 4
       - name: Build unsigned app
         env:
+          SCHEME: ${{ matrix.scheme }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
         run: |
           nice -n 15 xcodebuild -project a-Shell.xcodeproj \
-            -scheme a-Shell-noPython -configuration Debug \
+            -scheme "$SCHEME" -configuration Debug \
             -destination "generic/platform=$PLATFORM" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" -jobs 4 \
             ARCHS="$ARCH" \
