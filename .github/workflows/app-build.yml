@@ -134,7 +134,7 @@ jobs:
           resources=Resources_mini
           [[ $SCHEME != a-Shell ]] || resources=Resources
           mkdir -p "$resources/Frameworks" "$resources/Library/lib"
-          download_input demrom/cpython 12516811642 fb086f726fe3dca49239717f7b48180998c36507 becb515988e4c47e32f58de8028da3ff68f17e3434dd952622318a7aedc3e767
+          download_input demrom/cpython 12547482345 fb086f726fe3dca49239717f7b48180998c36507 b74fdbc87f3fde2d0481a6992556e4c23feb451aaccda4e3597413a5847b3502
           (cd "$input" && shasum -a 256 -c checksums.txt)
           for archive in "$input/"*.xcframework.zip; do
             install_xcf "$archive" "$input/frameworks"
@@ -147,7 +147,7 @@ jobs:
           cp -R "$input/data/$sdk/lib/" "$resources/Library/lib/"
 
 
-          download_input demrom/cpython 12517076981 fb086f726fe3dca49239717f7b48180998c36507 c292ef81c0c946ecc04d0fee31749e8f3014e1d97c8badb8a16f5c475b4a6fd9
+          download_input demrom/cpython 12547696903 fb086f726fe3dca49239717f7b48180998c36507 1ee1ff8f40b720d7441951648088c59667730b5ca3944e558b719fe55e7f8bf8
           (cd "$input" && shasum -a 256 -c mini-checksums.txt)
           for archive in "$input/"*.xcframework.zip; do
             install_xcf "$archive" "$input/frameworks"
