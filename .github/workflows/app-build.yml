@@ -8,7 +8,38 @@ permissions:
   contents: read
 
 jobs:
+  multimarkdown:
+    name: MultiMarkdown framework
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        with:
+          version: '0.11.21'
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          cmake --version
+          ninja --version
+          uv --version
+      - name: Build and audit MultiMarkdown
+        run: nice -n 15 bash scripts/build-multimarkdown.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: multimarkdown-framework
+          path: |
+            .build/multimarkdown/dist/*.zip
+            .build/multimarkdown/dist/checksums.txt
+            .build/multimarkdown/dist/*-audit.json
+          include-hidden-files: true
+          if-no-files-found: error
   build:
+    needs: multimarkdown
     name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: macos-15
     timeout-minutes: 60
@@ -128,6 +159,11 @@ jobs:
           # The non-Python scheme shares these native command frameworks.
           if [[ $SCHEME == a-Shell-noPython ]]; then exit 0; fi
 
+          # Validation stack: #1121 supplies Pico; master references it but has no producer.
+          download_input demrom/a-shell 12555962371 a2be7e1a780fdcb8b589d08f8455a6f23022de6d 35aaf46dd0d105ba931d5606f67ff04aad3ad08f68514f8e8204f64114d5f8c9
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/pico.xcframework.zip" xcfs/.build/artifacts/xcfs
+
           sdk=iphoneos
           slice=ios-arm64
           if [[ $TARGET == simulator ]]; then sdk=iphonesimulator; slice=ios-arm64_x86_64-simulator; fi
@@ -238,6 +274,16 @@ jobs:
               esac
             done < <(otool -L "$binary" | awk '/^\t/ {print $1}')
           done
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: matrix.scheme != 'a-Shell-noPython'
+        with:
+          name: multimarkdown-framework
+          path: ${{ runner.temp }}/multimarkdown
+      - name: Install audited MultiMarkdown
+        if: matrix.scheme != 'a-Shell-noPython'
+        run: |
+          (cd "$RUNNER_TEMP/multimarkdown" && shasum -a 256 -c checksums.txt)
+          unzip -q "$RUNNER_TEMP/multimarkdown/multimarkdown.xcframework.zip" -d xcfs/.build/artifacts/xcfs
       - name: Build unsigned app
         env:
           SCHEME: ${{ matrix.scheme }}
