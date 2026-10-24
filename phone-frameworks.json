@@ -1,0 +1,227 @@
+[
+  {
+    "name": "ios_system",
+    "path": "ios_system.framework",
+    "sha256": "98589c05d2e19f9c54519756659326bc8f3426ddac8466c30c3a487fb77da78e",
+    "commands": []
+  },
+  {
+    "name": "text",
+    "path": "text.framework",
+    "sha256": "328933a3fd46411061546096b3ea6cee9f3b2c193184f81beeb278fd82415054",
+    "commands": []
+  },
+  {
+    "name": "files",
+    "path": "files.framework",
+    "sha256": "493469666cb201e5c6957f87c450f0e05e4ca2586ce8248573b0e135f8c81c9d",
+    "commands": []
+  },
+  {
+    "name": "dash",
+    "path": "dash.framework",
+    "sha256": "03ccdf5784e05e5cdaa7fc9b824de9239889c388fdcc496e6770f8144e1dcbc7",
+    "commands": []
+  },
+  {
+    "name": "dashA",
+    "path": "dashA.framework",
+    "sha256": "1c47c23244449b29ff342deff964c77c49c896959f46d1896a9275f528df8f2f",
+    "commands": []
+  },
+  {
+    "name": "dashB",
+    "path": "dashB.framework",
+    "sha256": "9c10d28b2f5befa561fcc884f82981128fb42fd3db9c614b2b360e2e8f7dd5f2",
+    "commands": []
+  },
+  {
+    "name": "dashC",
+    "path": "dashC.framework",
+    "sha256": "af3952ea3f55b2bc5962ae6ea3848ca1b46135ded5e8c6090f7db7b73d9d2438",
+    "commands": []
+  },
+  {
+    "name": "dashD",
+    "path": "dashD.framework",
+    "sha256": "1ef7b03e822adc840e9ce51b6b56c987a4b6acacc2cbce864ac068e52d720525",
+    "commands": []
+  },
+  {
+    "name": "dashE",
+    "path": "dashE.framework",
+    "sha256": "16facdd9c6889971fc5d7de4a36d573b16720adf3e90263849e8490e28583e3b",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTP",
+    "path": "GitRemoteHTTP.framework",
+    "sha256": "33e6abd8140d1f69bb22e9509ad9cb73f31a42d35f328cb7017c9192705c0d44",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPA",
+    "path": "GitRemoteHTTPA.framework",
+    "sha256": "8652fdc2dd6a05d753d7eff3e7a84a6f197939582361bd7495316da3a21925e4",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPB",
+    "path": "GitRemoteHTTPB.framework",
+    "sha256": "bebacf29aebab2483a7446a7452679908816fc1ea20af0d9a70aa9d4cc7c7c2c",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPC",
+    "path": "GitRemoteHTTPC.framework",
+    "sha256": "83ed3062d1f2713c24a7c4743a6c9d7b4b5dcadf02e56bcd2daee5e4bfa0aa8c",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPD",
+    "path": "GitRemoteHTTPD.framework",
+    "sha256": "1a17335d84014d639c47925efd06a0e3d82ef75f1f0d2ce59b15c4925c386dc8",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPE",
+    "path": "GitRemoteHTTPE.framework",
+    "sha256": "35229a718f44d26c1709fff8a05df3ff7a1f3114728dc7fabde287b436fe3870",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPF",
+    "path": "GitRemoteHTTPF.framework",
+    "sha256": "c1e6ea5706d653f606a777ba9ce14c942c9402bba11145d65840d097e3bf26ce",
+    "commands": []
+  },
+  {
+    "name": "GitRemoteHTTPG",
+    "path": "GitRemoteHTTPG.framework",
+    "sha256": "481331dc033933ef2e41c0a12646d9bb20e03838a0eead3813763f37827984e0",
+    "commands": []
+  },
+  {
+    "name": "GitStock",
+    "path": "GitStock.framework",
+    "sha256": "26cbbd1f7f7d41e3342c3767ae394063dbe7559c1f804fb51de61d535b5c5712",
+    "commands": [
+      "git",
+      "git-remote-http",
+      "git-remote-https",
+      "git-upload-pack",
+      "git-receive-pack",
+      "git-upload-archive"
+    ]
+  },
+  {
+    "name": "GitStockA",
+    "path": "GitStockA.framework",
+    "sha256": "19af102aafe2d3cb46e5314fcfe74be14bff67b564856ad38059ad27ab9c1ec8",
+    "commands": []
+  },
+  {
+    "name": "GitStockB",
+    "path": "GitStockB.framework",
+    "sha256": "f52727b8a8fb956be13a762e6d4f9c98a0a73a4ef675279d161a349b0924da50",
+    "commands": []
+  },
+  {
+    "name": "GitStockC",
+    "path": "GitStockC.framework",
+    "sha256": "3a827e86bd4d315f1fd515888773d063f398c083e3c4f62045dbdbe29d6cb7ff",
+    "commands": []
+  },
+  {
+    "name": "GitStockD",
+    "path": "GitStockD.framework",
+    "sha256": "8b40197e2a144d8936a7f3e5d814aa4b36b6f65caee769661462f6ec4b2fb187",
+    "commands": []
+  },
+  {
+    "name": "GitStockE",
+    "path": "GitStockE.framework",
+    "sha256": "b7b28d568a2de639923c5fdea6d401ae188046a554e5af1b2d7d29e1744fbbcd",
+    "commands": []
+  },
+  {
+    "name": "GitStockF",
+    "path": "GitStockF.framework",
+    "sha256": "09bbe7f7153b538e2f6a984febb4251fedb9296508e08f146614777e9fceade1",
+    "commands": []
+  },
+  {
+    "name": "GitStockG",
+    "path": "GitStockG.framework",
+    "sha256": "4cc9adace06ea12d17f3706e7d2b6a5d2be5cc40da45b285adb545ca53f256a1",
+    "commands": []
+  },
+  {
+    "name": "SSHServer",
+    "path": "SSHServer.framework",
+    "sha256": "cca51125b67b6241c9caf8485d3ca75c5a28f2a58c57062795860b5ec3e8e6ce",
+    "commands": [
+      "sshd"
+    ]
+  },
+  {
+    "name": "SSHStock",
+    "path": "SSHStock.framework",
+    "sha256": "bfe585b26d863e602a629c3eb58d5a1e4e5e269f1dcfac207db1675b747dac67",
+    "commands": [
+      "ssh"
+    ]
+  },
+  {
+    "name": "SSHKeygenStock",
+    "path": "SSHKeygenStock.framework",
+    "sha256": "84f0cc770f79f62ff9a4021103752d1570d59d963d23e9035307e27335539204",
+    "commands": [
+      "ssh-keygen"
+    ]
+  },
+  {
+    "name": "SCPStock",
+    "path": "SCPStock.framework",
+    "sha256": "62d064514cbe54a4400cb568eaab9b5f36e25c74703ea3c551cd060441ffe7fb",
+    "commands": [
+      "scp"
+    ]
+  },
+  {
+    "name": "SFTPStock",
+    "path": "SFTPStock.framework",
+    "sha256": "ab4c4a1052cd10810e6b1a4014c734b5e080f26e035652289e4a510dceda37bf",
+    "commands": [
+      "sftp"
+    ]
+  },
+  {
+    "name": "make",
+    "path": "make.framework",
+    "sha256": "48bf8d53ac0eef9755bce8240f4872793f8e9cd25371d51c4db20e0a60221cc1",
+    "commands": [
+      "make"
+    ]
+  },
+  {
+    "name": "mandoc",
+    "path": "mandoc.framework",
+    "sha256": "25c51dfc049a481813f869d3edf14ce0d2b50f8d71c45567a1737853cc1b93a9",
+    "commands": [
+      "mandoc",
+      "mandocdb",
+      "man",
+      "apropos",
+      "whatis"
+    ]
+  },
+  {
+    "name": "unrar",
+    "path": "unrar.framework",
+    "sha256": "3465b257bc1d43a6350fbb1e7444f2af979c197216531053f94a137d5e9654e2",
+    "commands": [
+      "unrar"
+    ]
+  }
+]

@@ -720,6 +720,23 @@ import ios_system
 import Combine
 import SwiftUI
 
+@_cdecl("ashell_sshd_status")
+public func sshdStatus(_ sessions: Int32, _ port: Int32, _ fingerprint: UnsafePointer<CChar>?, _ stop: (@convention(c) () -> Void)?) {
+    guard sessions >= 0 else {
+        ServiceIndicators.shared.remove(id: "sshd")
+        return
+    }
+    let hostKey = fingerprint.map { String(cString: $0) } ?? "unavailable"
+    ServiceIndicators.shared.set(ServiceIndicator(id: "sshd", title: "SSH", details: [
+        "State: listening",
+        "Port: \(port)",
+        "Active sessions: \(sessions)",
+        "Host key: \(hostKey)"
+    ], stop: stop.map { action in
+        { DispatchQueue.global(qos: .userInitiated).async { action() } }
+    }, port: Int(port), fingerprint: hostKey, activeClientCount: Int(sessions)))
+}
+
 final class Relay: ObservableObject {
     static let shared = Relay()
     @Published private(set) var indicatorConnections: Int?

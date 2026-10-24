@@ -13,7 +13,7 @@ enum TermWorker {
         lock.lock()
         connection = value
         lock.unlock()
-        value.remoteObjectInterface = NSXPCInterface(with: TermControlWire.self)
+        value.remoteObjectInterface = NSXPCInterface(with: HerdrSpawnBrokerWire.self)
     }
 
     static func perform(_ request: TermRequest, reply: @escaping (TermResponse) -> Void) {
@@ -24,7 +24,7 @@ enum TermWorker {
         do {
             let data = try JSONEncoder().encode(request)
             let proxy = value.remoteObjectProxyWithErrorHandler { error in reply(.error(503, error.localizedDescription)) }
-            guard let service = proxy as? TermControlWire else { reply(.error(503, "host terminal service is unavailable")); return }
+            guard let service = proxy as? HerdrSpawnBrokerWire else { reply(.error(503, "host terminal service is unavailable")); return }
             service.terminal(data) { status, data, type in reply(TermResponse(status: status, data: data, contentType: type)) }
         } catch { reply(.error(400, error.localizedDescription)) }
     }

@@ -2,14 +2,32 @@
 
 // One connection owns one real process and one existing native pane handle.
 @protocol HerdrPaneWire
-- (void)spawn:(NSString *)command cwd:(NSData *)cwd home:(NSData *)home documents:(NSData *)documents probe:(NSString *)probe env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows reply:(void (^)(int, NSFileHandle *, int))reply;
+- (void)spawn:(NSString *)command cwd:(NSData *)cwd home:(NSData *)home documents:(NSData *)documents probe:(NSString *)probe env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separateStderr reply:(void (^)(int, NSFileHandle *, NSFileHandle *, int))reply;
 - (void)poll:(void (^)(int, int))reply;
-- (void)state:(void (^)(int, NSString *, int))reply;
+- (void)pollUsage:(void (^)(int, int, NSData *))reply;
 - (void)resize:(unsigned)cols rows:(unsigned)rows reply:(void (^)(int))reply;
 - (void)closeInput:(void (^)(int))reply;
 - (void)interrupt:(void (^)(int))reply;
+- (void)state:(void (^)(int, NSString *, int))reply;
 - (void)releasePane;
+// The worker exits instead of replying; synchronous callers observe XPC loss.
 - (void)terminate:(void (^)(void))reply;
 @end
 
 NSObject<HerdrPaneWire> *herdr_worker_service(void);
+
+// A worker asks its owning host to allocate another isolated process.
+@protocol HerdrSpawnBrokerWire
+- (void)terminal:(NSData * _Nonnull)request reply:(void (^ _Nonnull)(NSInteger, NSData * _Nonnull, NSString * _Nonnull))reply;
+- (void)spawnChild:(NSString *)command cwd:(NSString *)cwd env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separate reply:(void (^)(int, NSString *, NSFileHandle *, NSFileHandle *))reply;
+- (void)pollChild:(NSString *)token reply:(void (^)(int, int))reply;
+- (void)closeChildInput:(NSString *)token reply:(void (^)(int))reply;
+- (void)cancelChild:(NSString *)token reply:(void (^)(int))reply;
+- (void)spawnHostChild:(NSString *)command cwd:(NSString *)cwd env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separate reply:(void (^)(int, NSString *, NSFileHandle *, NSFileHandle *))reply;
+- (void)pollChildUsage:(NSString *)token reply:(void (^)(int, int, NSData *))reply;
+- (void)resizeChild:(NSString *)token cols:(unsigned)cols rows:(unsigned)rows reply:(void (^)(int))reply;
+- (void)interruptChild:(NSString *)token reply:(void (^)(int))reply;
+- (void)releaseChild:(NSString *)token;
+@end
+
+NSObject<HerdrSpawnBrokerWire> * _Nonnull herdr_spawn_broker(void (^ _Nonnull terminal)(NSData * _Nonnull, void (^ _Nonnull)(NSInteger, NSData * _Nonnull, NSString * _Nonnull)));

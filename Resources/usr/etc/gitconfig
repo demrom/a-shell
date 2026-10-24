@@ -1,0 +1,6 @@
+[core]
+	deltaBaseCacheLimit = 0
+	packedGitWindowSize = 32m
+	packedGitLimit = 256m
+[pack]
+	threads = 1

@@ -1,14 +1,17 @@
 #import "PaneWire.h"
+#import "HostPane.h"
 #include "herdr_pane.h"
 #include <errno.h>
 #include <dirent.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <stdatomic.h>
 #include <unistd.h>
 
 extern void herdr_extension_connect(void (^)(NSXPCConnection *, NSError *));
 extern void herdr_extension_disconnect(NSXPCConnection *);
 extern void herdr_extension_observe(NSXPCConnection *, pid_t);
+
 
 static void log_host_library(const char *phase) {
     int saved = errno;
@@ -23,12 +26,17 @@ static void log_host_library(const char *phase) {
 @interface RemotePane : NSObject
 @property(nonatomic, strong) NSXPCConnection *connection;
 @property(nonatomic, strong) id<HerdrPaneWire> proxy;
+@property(nonatomic, strong) NSFileHandle *output;
+@property(nonatomic, strong) NSFileHandle *errorOutput;
 @property(atomic) BOOL interrupted;
+@property(atomic) BOOL cancelled;
 @property(nonatomic, strong) NSMutableArray<NSURL *> *directories;
 @property(nonatomic, copy) NSString *probeDirectory;
 @end
 @implementation RemotePane
 - (void)dealloc {
+    [_output closeAndReturnError:NULL];
+    [_errorOutput closeAndReturnError:NULL];
     // Only remove our empty disposable directory, never a project tree.
     if (_probeDirectory) rmdir(_probeDirectory.fileSystemRepresentation);
     log_host_library("before_scope_release");
@@ -40,9 +48,98 @@ static void log_host_library(const char *phase) {
 }
 @end
 
+// A connection owns its descendants; invalidation releases the whole subtree.
+@interface BrokerChild : NSObject
+@property(nonatomic) void *job;
+@property(nonatomic) BOOL host;
+@end
+@implementation BrokerChild
+- (void)dealloc { if (_job) { if (_host) ashell_host_pane_release(_job); else herdr_pane_release(_job); } }
+@end
+
+@interface SpawnBroker : NSObject <HerdrSpawnBrokerWire>
+@property(nonatomic, copy) void (^terminal)(NSData *, void (^)(NSInteger, NSData *, NSString *));
+@property(nonatomic, strong) NSMutableDictionary<NSString *, BrokerChild *> *children;
+@end
+@implementation SpawnBroker
+- (void)terminal:(NSData *)request reply:(void (^)(NSInteger, NSData *, NSString *))reply { self.terminal(request, reply); }
+- (instancetype)init {
+    if ((self = [super init])) _children = [NSMutableDictionary new];
+    return self;
+}
+- (void)spawnChild:(NSString *)command cwd:(NSString *)cwd env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separate reply:(void (^)(int, NSString *, NSFileHandle *, NSFileHandle *))reply {
+    [self spawn:command cwd:cwd env:env cols:cols rows:rows tty:tty separateStderr:separate host:NO reply:reply];
+}
+- (void)spawnHostChild:(NSString *)command cwd:(NSString *)cwd env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separate reply:(void (^)(int, NSString *, NSFileHandle *, NSFileHandle *))reply {
+    [self spawn:command cwd:cwd env:env cols:cols rows:rows tty:tty separateStderr:separate host:YES reply:reply];
+}
+- (void)spawn:(NSString *)command cwd:(NSString *)cwd env:(NSArray<NSString *> *)env cols:(unsigned)cols rows:(unsigned)rows tty:(BOOL)tty separateStderr:(BOOL)separate host:(BOOL)host reply:(void (^)(int, NSString *, NSFileHandle *, NSFileHandle *))reply {
+    const char **values = calloc(env.count + 2, sizeof(*values));
+    if (!values) { reply(ENOMEM, nil, nil, nil); return; }
+    NSUInteger count = 0;
+    for (NSString *value in env) {
+        if (host && ([value hasPrefix:@"HERDR_WORKER_PID="] || [value hasPrefix:@"ASHELL_WORKER_PID="] || [value hasPrefix:@"ASHELL_WORKER_ROOT_PID="] || [value hasPrefix:@"TMPDIR="])) continue;
+        values[count++] = value.UTF8String;
+    }
+    NSString *temporary = host ? [@"TMPDIR=" stringByAppendingString:NSTemporaryDirectory()] : nil;
+    if (temporary) values[count++] = temporary.UTF8String;
+    int fd = -1;
+    BrokerChild *child = [BrokerChild new];
+    child.host = host;
+    herdr_pane_options options = { .size = sizeof(options), .tty = tty, .separate_stderr = separate };
+    void *job = NULL;
+    int error = (host ? ashell_host_pane_spawn_ex : herdr_pane_spawn_ex)(command.UTF8String, cwd.fileSystemRepresentation, cols, rows, values, &options, &fd, &job);
+    free(values);
+    if (error) { reply(error, nil, nil, nil); return; }
+    child.job = job;
+    NSString *token = NSUUID.UUID.UUIDString;
+    @synchronized (self) { self.children[token] = child; }
+    NSFileHandle *output = [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
+    NSFileHandle *errors = options.stderr_fd >= 0 ? [[NSFileHandle alloc] initWithFileDescriptor:options.stderr_fd closeOnDealloc:YES] : nil;
+    reply(0, token, output, errors);
+}
+- (BrokerChild *)child:(NSString *)token { @synchronized (self) { return self.children[token]; } }
+- (void)pollChild:(NSString *)token reply:(void (^)(int, int))reply {
+    [self pollChildUsage:token reply:^(int result, int status, NSData *usage) { reply(result, status); }];
+}
+- (void)pollChildUsage:(NSString *)token reply:(void (^)(int, int, NSData *))reply {
+    BrokerChild *child = [self child:token];
+    int status = 0;
+    int available = 0;
+    struct rusage usage;
+    int result = child ? (child.host ? ashell_host_pane_poll_usage : herdr_pane_poll_usage)(child.job, &status, &usage, &available) : -ESRCH;
+    reply(result, status, result == 1 && available ? [NSData dataWithBytes:&usage length:sizeof(usage)] : nil);
+}
+- (void)closeChildInput:(NSString *)token reply:(void (^)(int))reply {
+    BrokerChild *child = [self child:token];
+    reply(child ? (child.host ? ashell_host_pane_close_stdin : herdr_pane_close_stdin)(child.job) : ESRCH);
+}
+- (void)cancelChild:(NSString *)token reply:(void (^)(int))reply {
+    BrokerChild *child = [self child:token];
+    reply(child ? (child.host ? ashell_host_pane_cancel : herdr_pane_cancel)(child.job) : ESRCH);
+}
+- (void)resizeChild:(NSString *)token cols:(unsigned)cols rows:(unsigned)rows reply:(void (^)(int))reply {
+    BrokerChild *child = [self child:token];
+    reply(child ? (child.host ? ashell_host_pane_resize : herdr_pane_resize)(child.job, cols, rows) : ESRCH);
+}
+- (void)interruptChild:(NSString *)token reply:(void (^)(int))reply {
+    BrokerChild *child = [self child:token];
+    reply(child ? (child.host ? ashell_host_pane_interrupt : herdr_pane_interrupt)(child.job) : ESRCH);
+}
+- (void)releaseChild:(NSString *)token { @synchronized (self) { [self.children removeObjectForKey:token]; } }
+@end
+
+
+
 int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols, unsigned rows, const char *const *envp, int *fd_out, void **job_out) {
+    herdr_pane_options options = {.size = sizeof(options), .tty = 1};
+    return herdr_pane_spawn_ex(command, cwd, cols, rows, envp, &options, fd_out, job_out);
+}
+int herdr_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, unsigned rows, const char *const *envp, herdr_pane_options *options, int *fd_out, void **job_out) {
     if (fd_out) *fd_out = -1;
     if (job_out) *job_out = NULL;
+    if (!options || options->size < sizeof(*options)) return EINVAL;
+    options->stderr_fd = -1;
     if (!command || !cwd || !fd_out || !job_out || !cols || !rows) return EINVAL;
     if (NSThread.isMainThread) return EDEADLK;
     @autoreleasepool {
@@ -109,15 +206,24 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols, unsign
         pane.proxy = [pane.connection synchronousRemoteObjectProxyWithErrorHandler:^(NSError *failure) { error = EPIPE; }];
         NSMutableArray *env = [NSMutableArray array];
         for (size_t i = 0; envp && envp[i]; i++) [env addObject:@(envp[i])];
-        __block int fd = -1;
-        [pane.proxy spawn:@(command) cwd:cwdBookmark home:homeBookmark documents:documentsBookmark probe:pane.probeDirectory env:env cols:cols rows:rows reply:^(int code, NSFileHandle *handle, int pid) {
+        __block int fd = -1, err_fd = -1;
+        BOOL separate = options->separate_stderr != 0;
+        [pane.proxy spawn:@(command) cwd:cwdBookmark home:homeBookmark documents:documentsBookmark probe:pane.probeDirectory env:env cols:cols rows:rows tty:options->tty != 0 separateStderr:separate reply:^(int code, NSFileHandle *handle, NSFileHandle *errorHandle, int pid) {
             herdr_extension_observe(pane.connection, pid);
             error = code;
-            if (!code && !handle) error = EPROTO;
+            if (!code && (!handle || (separate && !errorHandle))) error = EPROTO;
             if (!error) {
                 fd = dup(handle.fileDescriptor);
                 if (fd < 0) error = errno;
                 else if (fcntl(fd, F_SETFD, FD_CLOEXEC)) { error = errno; close(fd); fd = -1; }
+                else pane.output = handle;
+            }
+            if (!error && separate) {
+                err_fd = dup(errorHandle.fileDescriptor);
+                if (err_fd < 0) error = errno;
+                else if (fcntl(err_fd, F_SETFD, FD_CLOEXEC)) { error = errno; close(err_fd); err_fd = -1; }
+                else pane.errorOutput = errorHandle;
+                if (error && fd >= 0) { close(fd); fd = -1; }
             }
             NSLog(@"Herdr extension spawn: real_pid=%d error=%d startup_ms=%.3f", pid, error, (NSProcessInfo.processInfo.systemUptime - started) * 1000);
         }];
@@ -130,18 +236,38 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols, unsign
             return spawnError;
         }
         *fd_out = fd;
+        options->stderr_fd = err_fd;
         *job_out = (__bridge_retained void *)pane;
         return 0;
     }
 }
 int herdr_pane_poll(void *job, int *status_out) {
+    return herdr_pane_poll_usage(job, status_out, NULL, NULL);
+}
+int herdr_pane_poll_usage(void *job, int *status_out, struct rusage *usage_out, int *usage_available) {
+    if (usage_available) *usage_available = 0;
     RemotePane *pane = (__bridge RemotePane *)job;
     if (!pane || !status_out) return -EINVAL;
-    // 137 is this backend's lost-worker status, not a recovered waitpid status.
-    if (pane.interrupted) { *status_out = 137; return 1; }
+    if (pane.cancelled) { *status_out = 137; return 1; }
+    if (pane.interrupted) return -EPIPE;
+    // The worker closes its socket streams before publishing completion. A
+    // hangup is observable even with unread output; keep polling local until
+    // then instead of waking the worker with an XPC request on every poll.
+    struct pollfd output = {.fd = pane.output.fileDescriptor, .events = POLLIN};
+    int ready = poll(&output, 1, 0);
+    if (ready < 0) return errno == EINTR ? 0 : -errno;
+    if (output.revents & POLLNVAL) return -EBADF;
+    if (!(output.revents & (POLLHUP | POLLERR))) return 0;
     __block int result = -EPIPE;
-    [pane.proxy poll:^(int value, int status) { result = value; *status_out = status; }];
-    if (result == -EPIPE) { pane.interrupted = YES; *status_out = 137; return 1; }
+    [pane.proxy pollUsage:^(int value, int status, NSData *usage) {
+        result = value;
+        if (value == 1) *status_out = status;
+        if (value == 1 && usage.length == sizeof(struct rusage)) {
+            if (usage_out) memcpy(usage_out, usage.bytes, sizeof(struct rusage));
+            if (usage_available) *usage_available = 1;
+        }
+    }];
+    if (result == -EPIPE) pane.interrupted = YES;
     return result;
 }
 int herdr_pane_state(void *job, char *command, size_t capacity, int *pid_out) {
@@ -180,6 +306,7 @@ int herdr_pane_interrupt(void *job) {
 int herdr_pane_cancel(void *job) {
     RemotePane *pane = (__bridge RemotePane *)job;
     if (!pane) return EINVAL;
+    pane.cancelled = YES;
     pane.interrupted = YES;
     [pane.proxy terminate:^{}];
     herdr_extension_disconnect(pane.connection);
@@ -192,3 +319,33 @@ void herdr_pane_release(void *job) {
     [pane.proxy terminate:^{}];
     herdr_extension_disconnect(pane.connection);
 }
+
+NSObject<HerdrSpawnBrokerWire> *herdr_spawn_broker(void (^terminal)(NSData *, void (^)(NSInteger, NSData *, NSString *))) {
+    SpawnBroker *broker = [SpawnBroker new];
+    broker.terminal = terminal;
+    return broker;
+}
+
+__attribute__((used, visibility("default"))) int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, unsigned rows, const char *const *env, herdr_pane_options *options, int *fd, void **job) { return herdr_pane_spawn_ex(command, cwd, cols, rows, env, options, fd, job); }
+__attribute__((used, visibility("default"))) int ashell_pane_poll(void *job, int *status) { return herdr_pane_poll(job, status); }
+__attribute__((used, visibility("default"))) int ashell_pane_close_stdin(void *job) { return herdr_pane_close_stdin(job); }
+__attribute__((used, visibility("default"))) int ashell_pane_cancel(void *job) { return herdr_pane_cancel(job); }
+__attribute__((used, visibility("default"))) void ashell_pane_release(void *job) { herdr_pane_release(job); }
+
+__attribute__((used, visibility("default"))) int ashell_pane_poll_usage(void *job, int *status, struct rusage *usage, int *available) { return herdr_pane_poll_usage(job, status, usage, available); }
+__attribute__((used, visibility("default"))) int ashell_pane_resize(void *job, unsigned cols, unsigned rows) { return herdr_pane_resize(job, cols, rows); }
+__attribute__((used, visibility("default"))) int ashell_pane_interrupt(void *job) { return herdr_pane_interrupt(job); }
+
+// The app compiles the existing runner under a distinct ABI; no new target or archive.
+#define ASHELL_HOST_PANE 1
+#define herdr_pane_spawn ashell_host_pane_spawn
+#define herdr_pane_spawn_ex ashell_host_pane_spawn_ex
+#define herdr_pane_poll ashell_host_pane_poll
+#define herdr_pane_poll_usage ashell_host_pane_poll_usage
+#define herdr_pane_state ashell_host_pane_state
+#define herdr_pane_resize ashell_host_pane_resize
+#define herdr_pane_close_stdin ashell_host_pane_close_stdin
+#define herdr_pane_interrupt ashell_host_pane_interrupt
+#define herdr_pane_cancel ashell_host_pane_cancel
+#define herdr_pane_release ashell_host_pane_release
+#include "../herdr-host-bridge/native-pane/herdr_pane.m"

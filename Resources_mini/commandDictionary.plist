@@ -466,9 +466,9 @@
 	</array>
 	<key>scp</key>
 	<array>
-		<string>ssh_cmd.framework/ssh_cmd</string>
-		<string>scp_main</string>
-		<string>12346ABCTdfpqrtvF:J:P:S:c:i:l:o:</string>
+		<string>@rpath/SCPStock.framework/SCPStock</string>
+		<string>ashell_scp_main</string>
+		<string></string>
 		<string>file</string>
 	</array>
 	<key>sed</key>
@@ -494,9 +494,9 @@
 	</array>
 	<key>sftp</key>
 	<array>
-		<string>ssh_cmd.framework/ssh_cmd</string>
-		<string>sftp_main</string>
-		<string>1246AafhNpqrvCc:D:i:l:o:s:S:b:B:F:J:P:R:</string>
+		<string>@rpath/SFTPStock.framework/SFTPStock</string>
+		<string>ashell_sftp_main</string>
+		<string></string>
 		<string>file</string>
 	</array>
 	<key>sh</key>
@@ -508,16 +508,16 @@
 	</array>
 	<key>ssh</key>
 	<array>
-		<string>ssh_cmd.framework/ssh_cmd</string>
-		<string>ssh_main</string>
-		<string>1246ab:c:e:fgi:kl:m:no:p:qstvxAB:CD:E:F:GI:J:KL:MNO:PQ:R:S:TVw:W:XYy</string>
-		<string>no</string>
+		<string>@rpath/SSHStock.framework/SSHStock</string>
+		<string>ashell_ssh_main</string>
+		<string></string>
+		<string>file</string>
 	</array>
 	<key>ssh-keygen</key>
 	<array>
-		<string>ssh_cmd.framework/ssh_cmd</string>
-		<string>sshkeygen_main</string>
-		<string>ABHLQXceghiklopquvxyC:D:E:F:G:I:J:K:M:N:O:P:R:S:T:V:W:Z:a:b:f:g:j:m:n:r:s:t:z:</string>
+		<string>@rpath/SSHKeygenStock.framework/SSHKeygenStock</string>
+		<string>ashell_ssh_keygen_main</string>
+		<string></string>
 		<string>file</string>
 	</array>
 	<key>ssh-agent</key>
@@ -751,6 +751,13 @@
 		<string></string>
 		<string>no</string>
 	</array>
+	<key>make</key>
+	<array>
+		<string>make.framework/make</string>
+		<string>main</string>
+		<string>BC:D:I:J:NST:V:WXd:ef:ij:km:nqrstv:w</string>
+		<string>file</string>
+	</array>
 	<key>mandoc</key>
 	<array>
 		<string>mandoc.framework/mandoc</string>
@@ -952,6 +959,109 @@
 		<string>curl-impersonate.framework/curl-impersonate</string>
 		<string>main</string>
 		<string>2346aAbBcCdDeEfgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwxXYyz#</string>
+		<string>file</string>
+	</array>
+	<key>git</key>
+	<array>
+		<string>GitStock.framework/GitStock</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitStockA.framework/GitStockA</string>
+			<string>GitStockB.framework/GitStockB</string>
+			<string>GitStockC.framework/GitStockC</string>
+			<string>GitStockD.framework/GitStockD</string>
+			<string>GitStockE.framework/GitStockE</string>
+			<string>GitStockF.framework/GitStockF</string>
+			<string>GitStockG.framework/GitStockG</string>
+		</array>
+	</array>
+	<key>git-receive-pack</key>
+	<array>
+		<string>GitStock.framework/GitStock</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitStockA.framework/GitStockA</string>
+			<string>GitStockB.framework/GitStockB</string>
+			<string>GitStockC.framework/GitStockC</string>
+			<string>GitStockD.framework/GitStockD</string>
+			<string>GitStockE.framework/GitStockE</string>
+			<string>GitStockF.framework/GitStockF</string>
+			<string>GitStockG.framework/GitStockG</string>
+		</array>
+	</array>
+	<key>git-remote-http</key>
+	<array>
+		<string>GitRemoteHTTP.framework/GitRemoteHTTP</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitRemoteHTTPA.framework/GitRemoteHTTPA</string>
+			<string>GitRemoteHTTPB.framework/GitRemoteHTTPB</string>
+			<string>GitRemoteHTTPC.framework/GitRemoteHTTPC</string>
+			<string>GitRemoteHTTPD.framework/GitRemoteHTTPD</string>
+			<string>GitRemoteHTTPE.framework/GitRemoteHTTPE</string>
+			<string>GitRemoteHTTPF.framework/GitRemoteHTTPF</string>
+			<string>GitRemoteHTTPG.framework/GitRemoteHTTPG</string>
+		</array>
+	</array>
+	<key>git-remote-https</key>
+	<array>
+		<string>GitRemoteHTTP.framework/GitRemoteHTTP</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitRemoteHTTPA.framework/GitRemoteHTTPA</string>
+			<string>GitRemoteHTTPB.framework/GitRemoteHTTPB</string>
+			<string>GitRemoteHTTPC.framework/GitRemoteHTTPC</string>
+			<string>GitRemoteHTTPD.framework/GitRemoteHTTPD</string>
+			<string>GitRemoteHTTPE.framework/GitRemoteHTTPE</string>
+			<string>GitRemoteHTTPF.framework/GitRemoteHTTPF</string>
+			<string>GitRemoteHTTPG.framework/GitRemoteHTTPG</string>
+		</array>
+	</array>
+	<key>git-upload-archive</key>
+	<array>
+		<string>GitStock.framework/GitStock</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitStockA.framework/GitStockA</string>
+			<string>GitStockB.framework/GitStockB</string>
+			<string>GitStockC.framework/GitStockC</string>
+			<string>GitStockD.framework/GitStockD</string>
+			<string>GitStockE.framework/GitStockE</string>
+			<string>GitStockF.framework/GitStockF</string>
+			<string>GitStockG.framework/GitStockG</string>
+		</array>
+	</array>
+	<key>git-upload-pack</key>
+	<array>
+		<string>GitStock.framework/GitStock</string>
+		<string>git_main</string>
+		<string></string>
+		<string>file</string>
+		<array>
+			<string>GitStockA.framework/GitStockA</string>
+			<string>GitStockB.framework/GitStockB</string>
+			<string>GitStockC.framework/GitStockC</string>
+			<string>GitStockD.framework/GitStockD</string>
+			<string>GitStockE.framework/GitStockE</string>
+			<string>GitStockF.framework/GitStockF</string>
+			<string>GitStockG.framework/GitStockG</string>
+		</array>
+	</array>
+	<key>sshd</key>
+	<array>
+		<string>@rpath/SSHServer.framework/SSHServer</string>
+		<string>ashell_sshd_main</string>
+		<string></string>
 		<string>file</string>
 	</array>
 </dict>

@@ -19,12 +19,8 @@
 #import "ios_system/ios_system.h"
 #include "herdr_pane.h"
 
-// Supplied by ios-system-guard.patch; the atomic slot also excludes WASM capture.
+// Each extension process owns one active native pane.
 extern _Atomic int ashell_exec_in_flight;
-extern int ashell_register_owned_streams(FILE *, FILE *, FILE *, void **);
-extern int ashell_register_command_input(FILE *, void **);
-extern void ashell_wait_owned_streams(void *);
-extern void ashell_unregister_owned_streams(void **);
 extern int ashell_owned_command_name(FILE *, char *, size_t);
 // Stock explicit-PID setter avoids the libc setenv fallback for the parent PID.
 extern int ios_setenv_pid(const char *, const char *, int, int);
@@ -34,9 +30,13 @@ typedef struct {
     pthread_cond_t ready;
     unsigned refs;
     int initialized, startup_error, done, status, completion_error;
+    struct rusage usage;
+    int usage_available;
     int peer_control, input_closed, is_pty;
     unsigned char eof_key;
     FILE *streams[3];
+    // Without a tty the session streams differ from the command streams, so stock isatty reports false.
+    FILE *session_in, *session_out, *session_err;
     void *registration;
     char key[64];
     char *command, *cwd, *previous_cwd;
@@ -53,7 +53,9 @@ static _Atomic(pane_job *) foreground_pane;
 // which can be a shell blocked in ios_waitpid rather than the running command.
 static _Atomic int foreground_command_pid;
 
-__attribute__((used)) int herdr_pane_exchange_foreground_pid(int pid) {
+__attribute__((used, visibility("default"))) int herdr_pane_exchange_foreground_pid(int pid) {
+    pane_job *job = atomic_load(&foreground_pane);
+    if (!job || ios_getContext() != job->key) return 0;
     return atomic_exchange(&foreground_command_pid, pid);
 }
 
@@ -195,8 +197,18 @@ static void *relay_input(void *cookie) {
         if (relay->command && (relay->command_eof || relay->input_eof) &&
             !relay->command_queue.length)
             close_input_writer(&relay->command->writer);
-        if (relay->input_eof && !relay->editor_queue.length)
-            close_input_writer(&relay->editor_writer);
+        // A command lease can return typeahead, including bytes already in the
+        // editor pipe. Deliver EOF only after both places have drained.
+        int drain_editor = 0;
+        if (relay->input_eof && !relay->command && !relay->editor_queue.length &&
+            relay->editor_writer >= 0) {
+            struct pollfd pending = {.fd = relay->editor_reader, .events = POLLIN};
+            int available = poll(&pending, 1, 0);
+            if (available < 0 && errno != EINTR) { relay->error = errno; break; }
+            if (pending.revents & (POLLERR | POLLNVAL)) { relay->error = EIO; break; }
+            if (!available) close_input_writer(&relay->editor_writer);
+            else drain_editor = 1;
+        }
         // Backpressure bounds queued input. Each pipe also has its kernel
         // buffer; transition queues have room to drain that existing typeahead.
         int can_read = !relay->input_eof && relay->editor_queue.length < 61440 &&
@@ -209,7 +221,8 @@ static void *relay_input(void *cookie) {
              .events = POLLOUT}
         };
         pthread_mutex_unlock(&relay->mutex);
-        int result = poll(fds, 4, -1);
+        // Pipe readers do not wake this relay when they drain its final bytes.
+        int result = poll(fds, 4, drain_editor ? 100 : -1);
         int poll_error = errno;
         pthread_mutex_lock(&relay->mutex);
         if (result < 0) {
@@ -265,6 +278,12 @@ static int request_input(pane_input_relay *relay, int request, command_input *co
     return error;
 }
 
+static void baseline_streams(pane_job *job, FILE *input) {
+    ios_setStreams(job->session_in ? job->session_in : input,
+                   job->session_out ? job->session_out : job->streams[1],
+                   job->session_err ? job->session_err : job->streams[2]);
+}
+
 static int stop_input_relay(pane_job *job) {
     pane_input_relay *relay = job->input_relay;
     if (!relay) return 0;
@@ -281,7 +300,7 @@ static int stop_input_relay(pane_job *job) {
     if (relay->command) {
         command_input *command = relay->command;
         ashell_wait_owned_streams(command->registration);
-        ios_setStreams(job->streams[0], job->streams[1], job->streams[2]);
+        baseline_streams(job, job->streams[0]);
         ios_settty(job->streams[0]);
         ashell_unregister_owned_streams(&command->registration);
         if (fclose(command->reader) && !error) error = errno;
@@ -352,7 +371,7 @@ static int prepare_input_relay(pane_job *job) {
 // Wait on the editor's real input and resize event without changing process
 // signal handlers or inserting synthetic keys into the command stream.
 // Return 0 for an unrelated reader, 1 for input, 2 for resize, or -errno.
-__attribute__((used)) int herdr_pane_wait_editor_input(FILE *input) {
+__attribute__((used, visibility("default"))) int herdr_pane_wait_editor_input(FILE *input) {
     pane_job *job = atomic_load(&foreground_pane);
     if (!job || !job->input_relay || input != job->streams[0]) return 0;
     struct kevent event;
@@ -365,7 +384,7 @@ __attribute__((used)) int herdr_pane_wait_editor_input(FILE *input) {
     return event.filter == EVFILT_USER ? 2 : 1;
 }
 
-__attribute__((used)) int herdr_pane_begin_foreground_input(FILE **input, void **token) {
+__attribute__((used, visibility("default"))) int herdr_pane_begin_foreground_input(FILE **input, void **token) {
     if (!input || !token || *token) return EINVAL;
     pane_job *job = atomic_load(&foreground_pane);
     if (!job || !job->input_relay || *input != job->streams[0]) return 0;
@@ -414,14 +433,14 @@ __attribute__((used)) int herdr_pane_begin_foreground_input(FILE **input, void *
     *token = command;
     // Stock tty detection compares command streams against the session streams.
     // Keep baseline outputs so explicit redirects remain non-terminal streams.
-    ios_setStreams(command->reader, job->streams[1], job->streams[2]);
+    baseline_streams(job, command->reader);
     // Stock ios_opentty borrowers must receive this command's input as well.
     ios_settty(command->reader);
     pthread_setcancelstate(cancellation, NULL);
     return 0;
 }
 
-__attribute__((used)) int herdr_pane_end_foreground_input(void *token) {
+__attribute__((used, visibility("default"))) int herdr_pane_end_foreground_input(void *token) {
     command_input *command = token;
     if (!command) return EINVAL;
     int cancellation;
@@ -432,7 +451,7 @@ __attribute__((used)) int herdr_pane_end_foreground_input(void *token) {
     // Dash. Borrow counts include asynchronous children through their cleanup.
     ashell_wait_owned_streams(command->registration);
     pane_job *job = command->job;
-    ios_setStreams(job->streams[0], job->streams[1], job->streams[2]);
+    baseline_streams(job, job->streams[0]);
     ios_settty(job->streams[0]);
     int retired = request_input(command->relay, INPUT_RETIRE, command);
     if (!error) error = retired;
@@ -472,6 +491,11 @@ static int close_streams(pane_job *job) {
         if (job->streams[i] && fclose(job->streams[i]) && !error) error = errno;
         job->streams[i] = NULL;
     }
+    FILE **session[3] = {&job->session_in, &job->session_out, &job->session_err};
+    for (int i = 0; i < 3; i++) {
+        if (*session[i] && fclose(*session[i]) && !error) error = errno;
+        *session[i] = NULL;
+    }
     return error;
 }
 
@@ -489,7 +513,7 @@ static void *run_pane(void *cookie) {
         // This runner is new: no parent session or TLS streams are switched or overwritten.
         ios_switchSession(job->key);
         ios_setContext(job->key);
-        ios_setStreams(job->streams[0], job->streams[1], job->streams[2]);
+        baseline_streams(job, job->streams[0]);
         ios_settty(job->streams[0]);
         thread_stdin = job->streams[0];
         thread_stdout = job->streams[1];
@@ -514,6 +538,14 @@ static void *run_pane(void *cookie) {
                 if (ios_setenv_pid(job->env[i], equals + 1, 1, pid)) error = EINVAL;
                 *equals = '=';
             }
+#ifndef ASHELL_HOST_PANE
+            // Identify this worker's root by its reserved command PID. Setup
+            // calls cannot consume it, and nested children have different PIDs.
+            char root_pid[32];
+            snprintf(root_pid, sizeof(root_pid), "%d", pid);
+            if (ios_setenv_pid("ASHELL_WORKER_ROOT_PID", root_pid, 1, pid)) error = EINVAL;
+            if (setenv("ASHELL_WORKER_ROOT_PID", root_pid, 1)) error = errno;
+#endif
             pthread_mutex_lock(&job->mutex);
             job->initialized = 1;
             pthread_cond_signal(&job->ready);
@@ -532,7 +564,7 @@ static void *run_pane(void *cookie) {
         pthread_mutex_lock(&job->mutex);
         int stream_error = close_streams(job);
         if (!error) error = stream_error;
-        // The lead explicitly permits stock process cwd changes for this single-pane stage.
+        // Restore the extension process cwd before publishing completion.
         ios_setDirectoryURL([NSURL fileURLWithPath:@(job->previous_cwd) isDirectory:YES]);
         struct stat before, restored;
         if (!getcwd(observed, sizeof(observed))) {
@@ -548,6 +580,7 @@ static void *run_pane(void *cookie) {
         job->startup_error = job->initialized ? 0 : error;
         job->completion_error = error;
         job->initialized = 1;
+        job->usage_available = getrusage(RUSAGE_SELF, &job->usage) == 0;
         job->done = 1;
         NSLog(@"Herdr pane lifecycle: exit key=%s status=%d error=%d", job->key, job->status, error);
         // Close the retained peer before announcing exit so output EOF is observable.
@@ -563,8 +596,18 @@ static void *run_pane(void *cookie) {
 
 int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols,
                      unsigned rows, const char *const *envp, int *fd_out, void **job_out) {
+    herdr_pane_options options = {.size = sizeof(options), .tty = 1};
+    return herdr_pane_spawn_ex(command, cwd, cols, rows, envp, &options, fd_out, job_out);
+}
+
+int herdr_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, unsigned rows,
+                         const char *const *envp, herdr_pane_options *options,
+                         int *fd_out, void **job_out) {
     if (fd_out) *fd_out = -1;
     if (job_out) *job_out = NULL;
+    if (!options || options->size < sizeof(*options)) return EINVAL;
+    options->stderr_fd = -1;
+    int peer_err = -1, err_child = -1;
     if (!fd_out || !job_out || !command || !*command || !cwd || cwd[0] != '/' ||
         !cols || cols > 9999 || !rows || rows > 9999) return EINVAL;
     @autoreleasepool {
@@ -652,8 +695,18 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols,
         error = job->is_pty ? (fcntl(job->peer_control, F_SETFD, FD_CLOEXEC) ? errno : 0) : socket_options(job->peer_control);
         if (!error && job->is_pty && fcntl(peer, F_SETFD, FD_CLOEXEC)) error = errno;
         if (error) { close(child); goto failed; }
+        if (options->separate_stderr) {
+            int pair[2];
+            if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair)) { error = errno; close(child); goto failed; }
+            peer_err = pair[0];
+            err_child = pair[1];
+            error = socket_options(peer_err);
+            if (!error) error = socket_options(err_child);
+            if (error) { close(child); goto failed; }
+        }
         for (int i = 0; i < 3; i++) {
-            int fd = i == 0 ? child : dup(child);
+            int fd = i == 0 ? child : i == 2 && err_child >= 0 ? err_child : dup(child);
+            if (i == 2 && fd == err_child) err_child = -1;
             if (fd < 0) { error = errno; goto failed; }
             job->streams[i] = fdopen(fd, i == 0 ? "r" : "w");
             if (!job->streams[i]) { error = errno; close(fd); goto failed; }
@@ -661,6 +714,12 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols,
             /* Match terminal stdout: libedit flushes each completed redraw. */
             int buffering = !job->is_pty && i == 1 ? _IOLBF : _IONBF;
             if (setvbuf(job->streams[i], NULL, buffering, 0)) { error = EIO; goto failed; }
+        }
+        if (!options->tty) {
+            job->session_in = fopen("/dev/null", "r");
+            job->session_out = fopen("/dev/null", "w");
+            job->session_err = fopen("/dev/null", "w");
+            if (!job->session_in || !job->session_out || !job->session_err) { error = errno; goto failed; }
         }
         if (!job->is_pty) error = prepare_input_relay(job);
         if (!error) error = ashell_register_owned_streams(job->streams[0], job->streams[1], job->streams[2], &job->registration);
@@ -678,13 +737,16 @@ int herdr_pane_spawn(const char *command, const char *cwd, unsigned cols,
         while (!job->initialized) pthread_cond_wait(&job->ready, &job->mutex);
         error = job->startup_error;
         pthread_mutex_unlock(&job->mutex);
-        if (error) { close(peer); drop_reference(job); return error; }
+        if (error) { close(peer); if (peer_err >= 0) close(peer_err); drop_reference(job); return error; }
         *fd_out = peer;
+        options->stderr_fd = peer_err;
         *job_out = job;
         return 0;
 failed:
         close_streams(job);
+        if (err_child >= 0) close(err_child);
         if (peer >= 0) close(peer);
+        if (peer_err >= 0) close(peer_err);
         drop_reference(job);
         atomic_store(&ashell_exec_in_flight, 0);
         return error;
@@ -692,11 +754,20 @@ failed:
 }
 
 int herdr_pane_poll(void *handle, int *status_out) {
+    return herdr_pane_poll_usage(handle, status_out, NULL, NULL);
+}
+
+int herdr_pane_poll_usage(void *handle, int *status_out, struct rusage *usage_out, int *usage_available) {
+    if (usage_available) *usage_available = 0;
     if (!handle || !status_out) return -EINVAL;
     pane_job *job = handle;
     pthread_mutex_lock(&job->mutex);
     int result = job->completion_error ? -job->completion_error : job->done;
-    if (job->done) *status_out = job->status;
+    if (job->done) {
+        *status_out = job->status;
+        if (usage_out && job->usage_available) *usage_out = job->usage;
+        if (usage_available) *usage_available = job->usage_available;
+    }
     pthread_mutex_unlock(&job->mutex);
     return result;
 }
@@ -812,3 +883,11 @@ void herdr_pane_release(void *handle) {
     pthread_mutex_unlock(&job->mutex);
     drop_reference(handle);
 }
+
+// Keep the public Dash callbacks paired with the retained private runner.
+__attribute__((used, visibility("default"))) int ashell_pane_wait_editor_input(FILE *input) { return herdr_pane_wait_editor_input(input); }
+__attribute__((used, visibility("default"))) int ashell_pane_begin_foreground_input(FILE **input, void **token) { return herdr_pane_begin_foreground_input(input, token); }
+__attribute__((used, visibility("default"))) int ashell_pane_end_foreground_input(void *token) { return herdr_pane_end_foreground_input(token); }
+#ifndef ASHELL_HOST_PANE
+__attribute__((used, visibility("default"))) int ashell_pane_exchange_foreground_pid(int pid) { return herdr_pane_exchange_foreground_pid(pid); }
+#endif

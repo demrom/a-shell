@@ -13,6 +13,11 @@ func initializeCommandEnvironment(hostInfo: [String: Any], resourcePath: String,
     setenv("VIMRUNTIME", resourcePath + "/vim", 1); // main resource for vim files
     setenv("TERM_PROGRAM", "a-Shell", 1) // let's inform users of who we are
     setenv("COLORTERM", "truecolor", 1) // tell programs that we can display 16-bit colors (required by Python package rich).
+    // iOS app bundles are flat: the resource path is the bundle root, so Frameworks sits beside the resources.
+    setenv("GIT_CONFIG_SYSTEM", resourcePath + "/usr/etc/gitconfig", 0)
+    setenv("GIT_EXEC_PATH", resourcePath + "/Frameworks/GitStock.framework/git-core", 0)
+    setenv("GIT_TEMPLATE_DIR", resourcePath + "/Frameworks/GitStock.framework/templates", 0)
+    setenv("GIT_SSL_CAINFO", resourcePath + "/cacert.pem", 0)
     setenv("SSL_CERT_FILE", resourcePath +  "/cacert.pem", 1); // SLL cacert.pem in $APPDIR/cacert.pem
     setenv("MAGIC", resourcePath +  "/usr/share/magic.mgc", 1); // magic file for file command
     if let groupURL {

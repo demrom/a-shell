@@ -55,8 +55,10 @@ final class HerdrWorkerPool {
                         throw CancellationError()
                     }
                     let connection = try process.makeXPCConnection()
-                    connection.exportedInterface = NSXPCInterface(with: TermControlWire.self)
-                    connection.exportedObject = TermControlService.shared
+                    connection.exportedInterface = NSXPCInterface(with: HerdrSpawnBrokerWire.self)
+                    connection.exportedObject = herdr_spawn_broker { request, reply in
+                        TermControlService.shared.terminal(request, reply: reply)
+                    }
                     slots[key] = .connected(generation, process, connection, nil)
                     return connection
                 } catch {

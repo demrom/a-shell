@@ -9,6 +9,9 @@ import SwiftTerm // for the terminal window
 import ios_system
 import TipKit // for helpful tips
 
+@_silgen_name("ashell_interrupt_foreground")
+private func interruptForeground() -> Int32
+
 #if HERDR_EMBEDDED
 @_silgen_name("herdr_ios_resize")
 private func herdrResize(_ cols: UInt16, _ rows: UInt16)
@@ -753,7 +756,7 @@ extension SceneDelegate {
                     ios_switchSession(self.persistentIdentifier?.toCString())
                     ios_setContext(UnsafeMutableRawPointer(mutating: self.persistentIdentifier?.toCString()))
                     // Then send interrupt to the running command:
-                    ios_kill() // TODO: add printPrompt() here if no command running
+                    if interruptForeground() != 0 { ios_kill() } // Preserve the stock fallback for commands without a foreground job.
                 }
                 if (currentCommand == "") {
                     // disable auto-complete menu if running
@@ -1677,6 +1680,9 @@ extension SceneDelegate {
                         }
                     }
                 }
+                // A pipe has no kernel foreground-job signals. Consume ETX only
+                // when the runtime can target the published foreground Git job.
+                if !javascriptRunning && myData.count == 1 && myData.first == 3 && interruptForeground() == 0 { return }
                 // Interactive commands (not WebAssembly): just send the input to them. Allows Vim to map control-D to down half a page.
                 guard stdin_file_input != nil else { return }
                 // TODO: don't send data if pipe already closed (^D followed by another key)
