@@ -924,7 +924,7 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
             if let error = locationError {
                 updateStatus("location error: \(error)")
             } else if let update = lastUpdate {
-                updateStatus("location session started; last update \(ISO8601DateFormatter().string(from: update))")
+                updateStatus("location session started; last fix \(ISO8601DateFormatter().string(from: update)) (\(max(0, Int(-update.timeIntervalSinceNow))) s old)")
             } else {
                 updateStatus("location session started; awaiting first update")
             }
@@ -941,10 +941,13 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
         }
     }
 
+    // Reduced fixes may be up to 20 minutes old (CLLocationManager accuracyAuthorization contract).
+    // Keep the precise bound short so stationary cached fixes still trigger a fresh one-shot request.
     func requestFix(timeout: TimeInterval, completion: @escaping (Result<CLLocation, LocationRequestError>) -> Void) {
         if manager.authorizationStatus == .authorizedAlways || manager.authorizationStatus == .authorizedWhenInUse,
            let location = manager.location, location.horizontalAccuracy >= 0,
-           (-10...0).contains(location.timestamp.timeIntervalSinceNow) {
+           (-(manager.accuracyAuthorization == .reducedAccuracy ? 20 * 60.0 : 10.0)...0).contains(location.timestamp.timeIntervalSinceNow) {
+            lastUpdate = location.timestamp
             completion(.success(location))
             return
         }
@@ -978,9 +981,9 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
 
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
         guard let location = locations.last(where: { $0.horizontalAccuracy >= 0 }) else { return }
-        lastUpdate = Date()
+        lastUpdate = location.timestamp
         locationError = nil
-        if (-10...0).contains(location.timestamp.timeIntervalSinceNow) {
+        if (-(manager.accuracyAuthorization == .reducedAccuracy ? 20 * 60.0 : 10.0)...0).contains(location.timestamp.timeIntervalSinceNow) {
             completeRequests(.success(location))
         }
         refresh()
