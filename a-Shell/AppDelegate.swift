@@ -831,9 +831,7 @@ struct LocationOptions {
 private final class BackgroundMode: NSObject, ObservableObject, CLLocationManagerDelegate {
     static let shared = BackgroundMode()
     static let preferenceKey = "background_mode"
-    static let accuracyKey = "background_accuracy"
     @Published private(set) var enabled = UserDefaults.standard.bool(forKey: preferenceKey)
-    @Published private(set) var accuracy = "precise"
     @Published private(set) var status = "off"
     private let manager = CLLocationManager()
     private var fixManager: CLLocationManager?
@@ -857,11 +855,6 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
         refresh()
     }
 
-    func setAccuracy(_ value: String) {
-        UserDefaults.standard.set(value, forKey: Self.accuracyKey)
-        refresh()
-    }
-
     private func updateStatus(_ detail: String) {
         let authorization: String
         switch manager.authorizationStatus {
@@ -871,16 +864,17 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
         case .notDetermined: authorization = "not determined"
         @unknown default: authorization = "unknown"
         }
-        let hidden = manager.authorizationStatus == .authorizedAlways && accuracy == "precise"
+        let precise = manager.accuracyAuthorization == .fullAccuracy
+        let hidden = manager.authorizationStatus == .authorizedAlways && precise
         let pill: String
         if !enabled {
             pill = "hidden (background mode is off)"
         } else if hidden {
             pill = "hidden (Always + precise)"
         } else {
-            pill = "shown (coarse or When In Use keeps the session visible; coarse with a hidden pill suspended a-Shell after about 5 s in testing)"
+            pill = "shown (reduced accuracy or When In Use keeps the session visible)"
         }
-        status = "mode: \(enabled ? "on" : "off")\nauthorization: \(authorization)\naccuracy: \(accuracy == "precise" ? "precise 100 m" : "coarse 3 km")\npill: \(pill)\nPrecise updates can use more battery than coarse updates.\n\(detail)"
+        status = "mode: \(enabled ? "on" : "off")\nauthorization: \(authorization)\naccuracy: \(precise ? "precise (100 m requested)" : "reduced (iOS setting)")\npill: \(pill)\nAccuracy follows Precise Location in iOS Settings. Precise updates can use more battery.\n\(detail)"
     }
 
     @objc func refresh() {
@@ -889,10 +883,10 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
             return
         }
         enabled = UserDefaults.standard.bool(forKey: Self.preferenceKey)
-        accuracy = UserDefaults.standard.string(forKey: Self.accuracyKey) == "coarse" ? "coarse" : "precise"
-        manager.desiredAccuracy = accuracy == "coarse" ? kCLLocationAccuracyThreeKilometers : kCLLocationAccuracyHundredMeters
+        manager.desiredAccuracy = manager.accuracyAuthorization == .fullAccuracy ? kCLLocationAccuracyHundredMeters : kCLLocationAccuracyReduced
         manager.allowsBackgroundLocationUpdates = enabled
-        manager.showsBackgroundLocationIndicator = accuracy == "coarse" || manager.authorizationStatus != .authorizedAlways
+        manager.showsBackgroundLocationIndicator = manager.accuracyAuthorization != .fullAccuracy || manager.authorizationStatus != .authorizedAlways
+        fixManager?.desiredAccuracy = manager.desiredAccuracy
         fixManager?.allowsBackgroundLocationUpdates = enabled
         fixManager?.showsBackgroundLocationIndicator = manager.showsBackgroundLocationIndicator
         guard enabled || !requests.isEmpty else {
@@ -1022,13 +1016,9 @@ private struct BackgroundSettings: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(footer: Text("Keeps the location session active for long scripts that use location. Precise updates can use more battery. The location pill is hidden only with Always permission and precise accuracy; coarse accuracy or When In Use keeps it visible. iOS can still terminate the app.")) {
+                Section(footer: Text("Keeps the location session active for long scripts that use location. Accuracy follows Precise Location in iOS Settings. Precise updates can use more battery. The location pill is hidden only with Always permission and Precise Location on; reduced accuracy or When In Use keeps it visible. iOS can still terminate the app.")) {
                     Toggle("Background mode", isOn: Binding(get: { mode.enabled }, set: { mode.setEnabled($0) }))
                         .accessibilityIdentifier("background-mode")
-                    Picker("Location accuracy", selection: Binding(get: { mode.accuracy }, set: { mode.setAccuracy($0) })) {
-                        Text("Precise (100 m)").tag("precise")
-                        Text("Coarse (3 km, shows indicator)").tag("coarse")
-                    }
                     Text(mode.status)
                         .accessibilityIdentifier("background-status")
                 }
@@ -1047,15 +1037,13 @@ private struct BackgroundSettings: View {
 public func ashellBackground(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>?) -> Int32 {
     let arguments = (1..<max(1, Int(argc))).map { String(cString: argv![$0]!) }
     let argument = arguments.first
-    let accuracy = arguments.count == 2 && argument == "on" ? ["--precise": "precise", "--coarse": "coarse"][arguments[1]] : nil
-    guard arguments.isEmpty || (arguments.count == 1 && ["on", "off", "status"].contains(argument!)) || accuracy != nil else {
-        fputs("Usage: background [on [--precise|--coarse]|off|status]\nWithout arguments, opens Settings in the app.\n", thread_stderr)
+    guard arguments.isEmpty || (arguments.count == 1 && ["on", "off", "status"].contains(argument!)) else {
+        fputs("Usage: background [on|off|status]\nWithout arguments, opens Settings in the app.\nAccuracy follows Precise Location in iOS Settings.\n", thread_stderr)
         return 2
     }
     var result = ""
     let action = {
         let mode = BackgroundMode.shared
-        if let accuracy = accuracy { mode.setAccuracy(accuracy) }
         if argument == "on" { mode.setEnabled(true) }
         else if argument == "off" { mode.setEnabled(false) }
         else { mode.refresh() }

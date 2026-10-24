@@ -20,26 +20,6 @@
 			<key>Type</key>
 			<string>PSMultiValueSpecifier</string>
 			<key>Title</key>
-			<string>Background location accuracy</string>
-			<key>Key</key>
-			<string>background_accuracy</string>
-			<key>DefaultValue</key>
-			<string>precise</string>
-			<key>Titles</key>
-			<array>
-				<string>Precise (100 m)</string>
-				<string>Coarse (3 km, shows indicator)</string>
-			</array>
-			<key>Values</key>
-			<array>
-				<string>precise</string>
-				<string>coarse</string>
-			</array>
-		</dict>
-		<dict>
-			<key>Type</key>
-			<string>PSMultiValueSpecifier</string>
-			<key>Title</key>
 			<string>Open files in Vim:</string>
 			<key>Key</key>
 			<string>VimOpenFile</string>
