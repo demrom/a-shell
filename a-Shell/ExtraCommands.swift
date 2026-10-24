@@ -1195,13 +1195,17 @@ func downloadRemoteFileFromCloud(fileURL: URL, waitForDownload: Bool = true) -> 
         if values?.ubiquitousItemDownloadingStatus == .current { return true }
         try manager.startDownloadingUbiquitousItem(at: target)
         if !waitForDownload { return true }
-        var coordinationError: NSError?
-        var downloaded = false
-        NSFileCoordinator().coordinate(readingItemAt: target, options: [], error: &coordinationError) { _ in
-            downloaded = true
+        while true {
+            // Ctrl-C uses pthread cancellation for native a-Shell commands.
+            pthread_testcancel()
+            target.removeAllCachedResourceValues()
+            let state = try? target.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemDownloadingErrorKey])
+            if let error = state?.ubiquitousItemDownloadingError { throw error }
+            if state?.ubiquitousItemDownloadingStatus == .current || state?.ubiquitousItemDownloadingStatus == .downloaded {
+                return true
+            }
+            usleep(50_000)
         }
-        if let error = coordinationError { throw error }
-        return downloaded
     } catch {
         if waitForDownload {
             fputs("\(target.path): \(error.localizedDescription)\n", thread_stderr)
@@ -1219,19 +1223,38 @@ public func downloadFile(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePo
         return 1
     }
     let commandName = String(cString: commandNameC)
-    let usage = "downloadFile: download iCloud files and wait until available.\nUsage: " + commandName + " name [.name.icloud ...]\n"
+    let usage = "downloadFile: start iCloud downloads and return.\nUsage: " + commandName + " [-w|--wait] [--] name [.name.icloud ...]\n-w, --wait: wait until contents are available; Ctrl-C stops waiting, not the download.\n"
     guard let args = convertCArguments(argc: argc, argv: argv) else { return 1 }
     if args.count == 1 {
         fputs(usage, thread_stdout)
         return 0
     }
-    if ((args[1] == "-h") || (args[1] == "--help")) {
-        fputs(usage, thread_stdout)
-        return 0
+    var paths = Array(args.dropFirst())
+    var waitForDownload = false
+    while let option = paths.first {
+        if option == "--" { paths.removeFirst(); break }
+        if option == "-w" || option == "--wait" {
+            waitForDownload = true
+            paths.removeFirst()
+            continue
+        }
+        if option == "-h" || option == "--help" {
+            fputs(usage, thread_stdout)
+            return 0
+        }
+        if option.hasPrefix("-") { fputs(usage, thread_stderr); return 1 }
+        break
     }
+    guard !paths.isEmpty else { fputs(usage, thread_stderr); return 1 }
+    let previousStatus = ios_getCommandStatus()
+    if waitForDownload { set_session_errno(130) }
+    defer { if waitForDownload { set_session_errno(previousStatus) } }
     var succeeded = true
-    for path in args.dropFirst() {
-        if !downloadRemoteFileFromCloud(fileURL: URL(fileURLWithPath: path)) { succeeded = false }
+    for path in paths {
+        if !downloadRemoteFileFromCloud(fileURL: URL(fileURLWithPath: path), waitForDownload: waitForDownload) {
+            if !waitForDownload { fputs("downloadFile: could not start download: \(path)\n", thread_stderr) }
+            succeeded = false
+        }
     }
     return succeeded ? 0 : 1
 }
@@ -1243,20 +1266,36 @@ public func downloadFolder(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutable
         return 1
     }
     let commandName = String(cString: commandNameC)
-    let usage = "downloadFolder: download iCloud files, including hidden files, and wait until available.\nUsage: " + commandName + " [-r] [--] [folder ...] (default is current directory)\n-r: include subfolders; symbolic links are not followed.\n"
+    let usage = "downloadFolder: start iCloud downloads, including hidden files, and return.\nUsage: " + commandName + " [-r] [-w|--wait] [--] [folder ...] (default is current directory)\n-r: include subfolders; symbolic links are not followed.\n-w, --wait: wait until contents are available; Ctrl-C stops waiting, not the downloads.\n"
     guard let args = convertCArguments(argc: argc, argv: argv) else { return 1 }
-    if args.dropFirst().first == "-h" || args.dropFirst().first == "--help" {
-        fputs(usage, thread_stdout)
-        return 0
-    }
     var paths = Array(args.dropFirst())
-    let recursive = paths.first == "-r"
-    if recursive { paths.removeFirst() }
-    if paths.first == "--" { paths.removeFirst() }
+    var recursive = false
+    var waitForDownload = false
+    while let option = paths.first {
+        if option == "--" { paths.removeFirst(); break }
+        if option == "-r" { recursive = true; paths.removeFirst(); continue }
+        if option == "-w" || option == "--wait" {
+            waitForDownload = true
+            paths.removeFirst()
+            continue
+        }
+        if option == "-h" || option == "--help" {
+            fputs(usage, thread_stdout)
+            return 0
+        }
+        if option.hasPrefix("-") { fputs(usage, thread_stderr); return 1 }
+        break
+    }
     if paths.isEmpty { paths = ["."] }
+    let previousStatus = ios_getCommandStatus()
+    if waitForDownload { set_session_errno(130) }
+    defer { if waitForDownload { set_session_errno(previousStatus) } }
     var succeeded = true
     for path in paths {
-        if !downloadFilesFromRemoteFolder(fileURL: URL(fileURLWithPath: path), recursive: recursive) { succeeded = false }
+        if !downloadFilesFromRemoteFolder(fileURL: URL(fileURLWithPath: path), recursive: recursive, waitForDownload: waitForDownload) {
+            if !waitForDownload { fputs("downloadFolder: could not start all downloads: \(path)\n", thread_stderr) }
+            succeeded = false
+        }
     }
     return succeeded ? 0 : 1
 }
