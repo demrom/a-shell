@@ -23,7 +23,7 @@ jobs:
             arch: arm64
           - target: simulator
             platform: iOS Simulator
-            arch: x86_64
+            arch: arm64
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     defaults:
@@ -35,13 +35,208 @@ jobs:
           persist-credentials: false
       - name: Initialize SwiftTerm
         run: git submodule update --init SwiftTerm
-      - name: Cache Swift package artifacts
-        uses: actions/cache@caa296126883cff596d87d8935842f9db880ef25 # v5
+      - name: Restore Swift package artifacts
+        id: xcfs
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
         with:
           path: xcfs/.build
-          key: xcfs-${{ runner.os }}-${{ runner.arch }}-xcode26.3-${{ hashFiles('xcfs/Package.swift', 'xcfs/Package.resolved') }}
+          key: xcfs-stock-v2-${{ runner.os }}-${{ runner.arch }}-xcode26.3-${{ hashFiles('xcfs/Package.swift', 'xcfs/Package.resolved', 'downloadFrameworks.sh') }}
       - name: Download frameworks and verify SPM checksums
         run: nice -n 15 ./downloadFrameworks.sh --jobs 4
+      - name: Save verified stock Swift package artifacts
+        if: steps.xcfs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: xcfs/.build
+          key: ${{ steps.xcfs.outputs.cache-primary-key }}
+      # Validation branch: public artifact downloads are checksum-pinned until producer releases exist.
+      - name: Install qualified candidate frameworks
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          download_input() {
+            local repository=$1 artifact=$2 head=$3 digest=$4
+            input="$RUNNER_TEMP/producer-inputs/$artifact"
+            mkdir -p "$input"
+            printf 'Producer %s head %s artifact %s\n' "$repository" "$head" "$artifact"
+            curl -fL --retry 3 "https://nightly.link/$repository/actions/artifacts/$artifact.zip" -o "$input/bundle.zip"
+            printf '%s  %s\n' "$digest" "$input/bundle.zip" | shasum -a 256 -c -
+            unzip -oq "$input/bundle.zip" -d "$input"
+          }
+          install_xcf() {
+            local archive=$1 destination=$2 name
+            name=$(basename "$archive" .zip)
+            mkdir -p "$destination"
+            rm -rf "${destination:?}/${name:?}"
+            unzip -q "$archive" -d "$destination"
+          }
+          download_input demrom/taskwarrior 12485091283 88e39a4d5265cee98c3ef6fa20ec24e37e6cb154 33e96ed18481068f34e72f9eff934ce3bfdc38ae398b1476021f3d5987f5480c
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in calc lex task; do
+            install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          download_input demrom/vim 12483924951 8a0738f1bd8f9d0185353440dff3a3f54c646208 146e4f142d338f343400c091b492ace9d0023a518334b36ddf26352b20d3f874
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in vim xxd; do
+            install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          download_input demrom/ImageMagick 12487369871 ddc754a4ca19dced10a28e9154d90de24a63bd2b 24ed0be69c23a174540250fc8558129de9acc5ddc3c7e28f6f62637b91dda845
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/magick.xcframework.zip" xcfs/.build/artifacts/xcfs/magick
+          download_input demrom/libgit2 12484761583 7030e754c39c0404348987e3d6419af18ce31038 e7d8a1cea601963d60b6febc78b46c25d0257c292df69c85f3e43dd580ec7d2b
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/lg2.xcframework.zip" xcfs/.build/artifacts/xcfs/lg2
+          download_input demrom/ios_system 12490674791 bae736ec230899620a8ecfc8f0aa36aac8cb6d75 6083097bdffe675d9bf5df59254da621c2a0d59488ba6fdaa1a1ab2038c52173
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in ffmpeg ffprobe; do
+            install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          download_input demrom/ios_system 12479793870 cfb4de563ffa479ad8b26db30f13a23b477b8e23 0978c59a6764c4496c3b481b74d73234c799536b0bba1d43218a8740aa83bb25
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/jq.xcframework.zip" xcfs/.build/artifacts/xcfs/jq
+          download_input demrom/vimproc.vim 12497911617 3dd900041767f07535fa2091282ec9ff1f99b0a2 d3d6589be2a21edf64bf52a5fe6fc343df0e681ee17440d6092ca4818eda7727
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/vimproc.xcframework.zip" xcfs/.build/artifacts/xcfs/vimproc
+          download_input demrom/ios_system 12511497874 0106478045c886ed2c4b8dc3aba11d6f989153de 6f52edf9aaba8baf82d7f0fa4103694043ed6ca003089f994231ec4abd5b0ec7
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in make mandoc unrar; do
+            install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          download_input demrom/a-shell 12501012139 7baf0309554d074e0782a0e0955d56d761e7e519 e6cb03f4929e99e95a703d1c11a1e00969b67b83cb5a7886573acbe47d3e15dd
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          install_xcf "$input/blink.xcframework.zip" xcfs/.build/artifacts/xcfs
+          download_input demrom/a-shell 12533652849 ed36bb705e6a4a1092421dac355a4aab3bb52b16 cf2eee2fb2fca912df6fd692705292b6e83066c4a0cb899188a1e71df2ae838f
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in openrsync openrsyncA; do
+            install_xcf "$input/$name.xcframework.zip" xcfs/.build/artifacts/xcfs
+          done
+          download_input demrom/Python-aux 12555252036 524d4448bf6e66b8ca3f0c6c0155a2cd614272b6 4eb0a33088a05149114a33308df244fe6711d39d385fc20d2fe8de38977df00e
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for name in freetype harfbuzz libpng; do
+            install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          if [[ $SCHEME == a-Shell ]]; then
+            install_xcf "$input/libzmq.xcframework.zip" cpython/XcFrameworks
+          fi
+
+          download_input demrom/dash_iOS 12512731116 7e2f2618154eaef97b7fa929b46dd289b1a4b3d9 0254d6362af64379411e9ec6a8d43cf4b5645b5f465a864640e9486cb993098c
+          (cd "$input/products" && shasum -a 256 -c checksums.txt)
+          for name in dash dashA dashB dashC dashD dashE; do
+            install_xcf "$input/products/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+          done
+          # The non-Python scheme shares these native command frameworks.
+          if [[ $SCHEME == a-Shell-noPython ]]; then exit 0; fi
+
+          sdk=iphoneos
+          slice=ios-arm64
+          if [[ $TARGET == simulator ]]; then sdk=iphonesimulator; slice=ios-arm64_x86_64-simulator; fi
+          resources=Resources_mini
+          [[ $SCHEME != a-Shell ]] || resources=Resources
+          mkdir -p "$resources/Frameworks" "$resources/Library/lib"
+          download_input demrom/cpython 12516811642 fb086f726fe3dca49239717f7b48180998c36507 becb515988e4c47e32f58de8028da3ff68f17e3434dd952622318a7aedc3e767
+          (cd "$input" && shasum -a 256 -c checksums.txt)
+          for archive in "$input/"*.xcframework.zip; do
+            install_xcf "$archive" "$input/frameworks"
+            name=$(basename "$archive" .xcframework.zip)
+            rm -rf "$resources/Frameworks/$name.framework"
+            cp -R "$input/frameworks/$name.xcframework/$slice/$name.framework" "$resources/Frameworks/"
+          done
+          mkdir -p "$input/data"
+          tar -xzf "$input/python-stdlib.tar.gz" -C "$input/data"
+          cp -R "$input/data/$sdk/lib/" "$resources/Library/lib/"
+
+
+          download_input demrom/cpython 12517076981 fb086f726fe3dca49239717f7b48180998c36507 c292ef81c0c946ecc04d0fee31749e8f3014e1d97c8badb8a16f5c475b4a6fd9
+          (cd "$input" && shasum -a 256 -c mini-checksums.txt)
+          for archive in "$input/"*.xcframework.zip; do
+            install_xcf "$archive" "$input/frameworks"
+            name=$(basename "$archive" .xcframework.zip)
+            rm -rf "$resources/Frameworks/$name.framework"
+            cp -R "$input/frameworks/$name.xcframework/$slice/$name.framework" "$resources/Frameworks/"
+          done
+          mkdir -p "$input/data"
+          tar -xzf "$input/python-mini.tar.gz" -C "$input/data"
+          cp -R "$input/data/$sdk/lib/" "$resources/Library/lib/"
+
+          if [[ $SCHEME == a-Shell ]]; then
+            download_input demrom/Python-aux 12555363171 524d4448bf6e66b8ca3f0c6c0155a2cd614272b6 505e41454f4bb4e5bb7df4a9e723938198d452e7eee73a33a94a1c79cb3117e1
+            (cd "$input" && shasum -a 256 -c gis-checksums.txt)
+            rm -rf "$resources/proj"
+            tar -xzf "$input/proj-data.tar.gz" -C "$resources"
+            test -s "$resources/proj/proj.db"
+            for name in libgdal libgeos libgeos_c libproj libspatialindex libspatialindex_c; do
+              install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+            done
+            download_input demrom/perl5 12502305150 ecb9b8ef3048d2a272f00f2dc04650f1c26714df 1749de8b3ba7523104852a73b1e46de6b39c0c48943788c8bd782d3d062f3d5a
+            (cd "$input" && shasum -a 256 -c checksums.txt)
+            for name in perl perlA perlB perlC; do
+              install_xcf "$input/$name.xcframework.zip" "xcfs/.build/artifacts/xcfs/$name"
+            done
+            download_input demrom/texlive-source 12500478816 49c3d01eb689f99e393b9aa8f13881ffc6e72f6d e20151ec9a2f7eac531750bf59b6fd715d691364c921930144be0275332f8b81
+            (cd "$input" && shasum -a 256 -c checksums.txt)
+            for archive in "$input/"*.xcframework.zip; do
+              name=$(basename "$archive" .xcframework.zip)
+              install_xcf "$archive" "xcfs/.build/artifacts/xcfs/$name"
+            done
+            while read -r artifact digest name directory; do
+              download_input demrom/a-shell "$artifact" 0b0c20bb8d645aaee11c76553990d962482949bc "$digest"
+              (cd "$input" && shasum -a 256 -c "$name.checksums.txt")
+              install_xcf "$input/$name.xcframework.zip" "$directory"
+            done <<'INPUTS'
+          12521003645 6e8e5ac714e7af6a4130539e8e39d0fd84690b0468e6f50f922aef1e8483a0fa helix helix
+          12521485654 dfa74ed4faf4deb848a78779f15e120c8f4048ebcacfe99fdbfeead7b636d979 gitoxide gitoxide
+          12521225640 63ec9a3b07afd7df114d3e4873078c69c2575b29628fca6c9f8fca23c32a7395 rg rg
+          12520048956 ad56645325bf7c168802a275ba4fe64f75ed076a99c9d65d92735ea9762a59e6 navi navi
+          12521655176 0f98f3106bfef21d7a01ab421d823af4b1d4d6ca9d546adc087bd4ab3e595077 Ruff ruff
+          12520746507 c99b66066b70e686392a9c3f5eee57af47316b8511111f61da521219003eb57e fzf fzf
+          12520323661 154bf4081716b97216e43c5ccaf2f86af8c1e7f66ed5475f3ae93817879d8695 fd fd
+          INPUTS
+            download_input demrom/Python-aux 12555750114 524d4448bf6e66b8ca3f0c6c0155a2cd614272b6 3189520575306a4908400f22b8ef802e8d6f2c894f802788035c027998f2e7db
+            (cd "$input" && shasum -a 256 -c openblas-checksums.txt)
+            for name in openblas flang_rt libomp; do
+              install_xcf "$input/$name.xcframework.zip" cpython/XcFrameworks
+            done
+            download_input demrom/Python-aux 12558508386 524d4448bf6e66b8ca3f0c6c0155a2cd614272b6 b911ad2d54aaa560550b3042f6edf1248b98dd2df6cf70a0ee58372efde2eda3
+            (cd "$input" && shasum -a 256 -c science-checksums.txt)
+            for archive in "$input/"*.xcframework.zip; do
+              install_xcf "$archive" "$input/frameworks"
+              name=$(basename "$archive" .xcframework.zip)
+              rm -rf "$resources/Frameworks/$name.framework"
+              cp -R "$input/frameworks/$name.xcframework/$slice/$name.framework" "$resources/Frameworks/"
+            done
+            mkdir -p "$input/data"
+            tar -xzf "$input/python-science.tar.gz" -C "$input/data"
+            tar -xzf "$input/python-full.tar.gz" -C "$input/data"
+            cp -R "$input/data/$sdk/lib/" "$resources/Library/lib/"
+            download_input demrom/a-shell 12528580705 0b0c20bb8d645aaee11c76553990d962482949bc 6de7e78b200ef73e13e33bfcf19f2e0c4eab7b6dd67f2147bbccbeeebd1a58f7
+            (cd "$input" && shasum -a 256 -c node.checksums.txt)
+            install_xcf "$input/node.xcframework.zip" xcfs
+            rm -rf "$resources/npm" "$resources/node-fetch"
+            unzip -oq "$input/node-npm.zip" -d "$resources/npm"
+            unzip -oq "$input/node-fetch.zip" -d "$resources/node-fetch"
+          fi
+          # Reuse the app's producer for its second embedded Python interpreter.
+          export PRODUCT_BUNDLE_IDENTIFIER=Nicolas-Holzschuch
+          # shellcheck source=/dev/null
+          source <(sed -n '/^duplicate_framework () {/,/^}/p' updatePythonFiles.sh)
+          declare -F duplicate_framework > /dev/null
+          for framework in "$resources/Frameworks/Python.framework" "$resources/Frameworks/Python-"*.framework; do
+            name=$(basename "$framework" .framework)
+            copy=${name/Python-/PythonA}
+            [[ $name != Python ]] || copy=pythonA
+            rm -rf "${resources:?}/Frameworks/${copy:?}.framework"
+            duplicate_framework "$framework" PythonA
+            binary="$resources/Frameworks/$copy.framework/$copy"
+            test -f "$binary"
+            # New aggregates can depend on sibling Python frameworks as well as Python itself.
+            while read -r dependency; do
+              case "$dependency" in
+                @rpath/Python-*.framework/*)
+                  install_name_tool -change "$dependency" "${dependency//Python-/PythonA}" "$binary" ;;
+              esac
+            done < <(otool -L "$binary" | awk '/^\t/ {print $1}')
+          done
       - name: Build unsigned app
         env:
           SCHEME: ${{ matrix.scheme }}
@@ -54,3 +249,44 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/DerivedData" -jobs 4 \
             ARCHS="$ARCH" \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Verify embedded Python framework closure
+        if: matrix.scheme != 'a-Shell-noPython'
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          sdk=iphoneos
+          [[ $TARGET != simulator ]] || sdk=iphonesimulator
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Debug-$sdk/$SCHEME.app"
+          resources=Resources_mini
+          [[ $SCHEME != a-Shell ]] || resources=Resources
+          for framework in "$resources/Frameworks/"*.framework; do
+            if [[ ! -d "$app/Frameworks/$(basename "$framework")" ]]; then
+              printf 'Missing embedded framework: %s\n' "$framework" >&2
+              exit 1
+            fi
+          done
+          for framework in "$app/Frameworks/"*.framework; do
+            name=$(basename "$framework" .framework)
+            otool -L "$framework/$name" > "$RUNNER_TEMP/framework-dependencies.txt"
+            if grep -q '@rpath/libgfortran.framework/' "$RUNNER_TEMP/framework-dependencies.txt"; then
+              printf 'Legacy Fortran dependency in %s\n' "$framework" >&2
+              exit 1
+            fi
+            conflict=
+            case $name in
+              PythonA*|pythonA) conflict='@rpath/Python[.-]' ;;
+              Python-*|Python) conflict='@rpath/(PythonA|pythonA)' ;;
+            esac
+            if [[ -n $conflict ]] && grep -Eq "^[[:space:]]*$conflict" "$RUNNER_TEMP/framework-dependencies.txt"; then
+              printf 'Cross-interpreter dependency in %s\n' "$framework" >&2
+              exit 1
+            fi
+            awk 'index($1, "@rpath/") == 1 && index($1, ".framework/") {split($1, path, "/"); print path[2]}' "$RUNNER_TEMP/framework-dependencies.txt" > "$RUNNER_TEMP/framework-siblings.txt"
+            while IFS= read -r sibling; do
+              if [[ ! -d "$app/Frameworks/$sibling" ]]; then
+                printf 'Missing dependency %s required by %s\n' "$sibling" "$framework" >&2
+                exit 1
+              fi
+            done < "$RUNNER_TEMP/framework-siblings.txt"
+          done

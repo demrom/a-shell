@@ -1,6 +1,11 @@
 // swift-tools-version:5.3
 import PackageDescription
 
+// Framework deployment floors stay with their producers: Node requires iOS 16;
+// The CPython producer targets iOS 14; the app build derives the PythonA copies.
+// Stock WasmKitCommand requires iOS 18; wasmkit is unavailable below iOS 18.
+// Node commands are unavailable below iOS 16.
+// The app deployment target remains iOS 14.
 _ = Package(
     name: "xcfs",
     platforms: [.macOS("11")],
@@ -345,6 +350,36 @@ _ = Package(
             name: "jq",
             url: "https://github.com/fprimex/jq/releases/download/ios/jq.xcframework.zip",
             checksum: "d3c4486e5ed788995b0ad9586465d3407e463d90f4e91b843846cabfe21f297f"
+        ),
+        .binaryTarget(
+            name: "libgdal",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libgdal.xcframework.zip",
+            checksum: "f4ad427037fc20100b16e2c2e846ab5eaac4bf9659d146f7d23b337cce37eb0d"
+        ),
+        .binaryTarget(
+            name: "libgeos",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libgeos.xcframework.zip",
+            checksum: "5dfbc5e075cb72cf28a375dbf63ba682b84b38d653a5a7937a75b8d371a5274c"
+        ),
+        .binaryTarget(
+            name: "libgeos_c",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libgeos_c.xcframework.zip",
+            checksum: "1b17e8a1d042763e5d7089c1ddde8ee8143ee20e13dc34cdfd608496fd91aec9"
+        ),
+        .binaryTarget(
+            name: "libproj",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libproj.xcframework.zip",
+            checksum: "f68312e2c808f4589cedc53250d904c895f7d753c28eb387c314793706892e15"
+        ),
+        .binaryTarget(
+            name: "libspatialindex",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libspatialindex.xcframework.zip",
+            checksum: "e2cbfe199ace3dbc315bcd5cbeb596944473b6cd1bd26df00e4031c74c9f87b3"
+        ),
+        .binaryTarget(
+            name: "libspatialindex_c",
+            url: "https://github.com/holzschu/Python-aux/releases/download/1.0/libspatialindex_c.xcframework.zip",
+            checksum: "adf65fcb46cde837160d042c217b916f96efabdb556cb7cf743471cefe6c885f"
         ),
         // TODO: add vimproc binary.
         .target(
