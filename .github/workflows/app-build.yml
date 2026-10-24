@@ -218,8 +218,9 @@ jobs:
           fi
           # Reuse the app's producer for its second embedded Python interpreter.
           export PRODUCT_BUNDLE_IDENTIFIER=Nicolas-Holzschuch
+          sed -n '/^duplicate_framework () {/,/^}/p' updatePythonFiles.sh > "$RUNNER_TEMP/duplicate-framework.sh"
           # shellcheck source=/dev/null
-          source <(sed -n '/^duplicate_framework () {/,/^}/p' updatePythonFiles.sh)
+          source "$RUNNER_TEMP/duplicate-framework.sh"
           declare -F duplicate_framework > /dev/null
           for framework in "$resources/Frameworks/Python.framework" "$resources/Frameworks/Python-"*.framework; do
             name=$(basename "$framework" .framework)
