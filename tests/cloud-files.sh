@@ -20,6 +20,9 @@ cloud_files_contract() {
     downloadFolder -r --wait cloud-fixture > cloud-recursive.out 2> cloud-recursive.err
     test "$?" != 0 || return 1
     grep -q 'remote.txt' cloud-recursive.err || return 1
+    downloadFolder -r cloud-fixture > cloud-default-recursive.out 2> cloud-default-recursive.err
+    test "$?" != 0 || return 1
+    grep -q 'remote.txt: ' cloud-default-recursive.err || return 1
     test -f cloud-fixture/.hidden/nested/.remote.txt.icloud || return 1
     test "$(cat cloud-fixture/.hidden/nested/local.txt)" = cloud-local-contract || return 1
     rm cloud-fixture/.hidden/nested/.remote.txt.icloud || return 1
