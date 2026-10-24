@@ -219,6 +219,7 @@ private final class LongCommandExecutor {
         thread_stdout = nil
         thread_stderr = nil
         ios_setStreams(stdin_file, stdout_file, stdout_file)
+        ios_useNativeTTY(true)
         setenv("LC_CTYPE", "UTF-8", 1)
         setlocale(LC_CTYPE, "UTF-8")
         var returnVal: Int32 = 0

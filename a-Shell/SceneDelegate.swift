@@ -1303,6 +1303,8 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
             stdout_button_active = true
             // NSLog("Streams for button: \(stdin_file)  \(stdout_file)")
             ios_setStreams(stdin_file, stdout_file, stdout_file)
+            ios_useNativeTTY(true)
+            defer { ios_useNativeTTY(false) }
             let pid = ios_fork()
             resultStack.removeAll()
             ios_system(command.decomposedStringWithCanonicalMapping)

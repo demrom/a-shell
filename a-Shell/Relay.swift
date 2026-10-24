@@ -941,6 +941,7 @@ final class Relay: ObservableObject {
         ios_switchSession(session)
         ios_setContext(session)
         ios_setStreams(input, output, output)
+        ios_useNativeTTY(true)
         ios_settty(nil)
         ios_setDirectoryURL(URL(fileURLWithPath: cwd))
         let pid = ios_fork()
@@ -1000,6 +1001,7 @@ final class Relay: ObservableObject {
         }
         ios_setContext(session)
         ios_setStreams(input, output, error)
+        ios_useNativeTTY(true)
         ios_settty(nil)
         ios_setDirectoryURL(URL(fileURLWithPath: cwd))
         let pid = ios_fork()

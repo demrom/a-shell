@@ -177,6 +177,7 @@ class ExecuteCommandIntentHandler: INExtension, ExecuteCommandIntentHandling
         // Set up the streams. nil for stdin, which will cause a crash if the command tries to read it.
         // (better than running forever)
         ios_setStreams(stdin_file, stdout_file, stdout_file)
+        ios_useNativeTTY(true)
         // Execute command (remove spaces at the beginning and end):
         // reset the LC_CTYPE (some commands (luatex) can change it):
         setenv("LC_CTYPE", "UTF-8", 1);

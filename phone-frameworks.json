@@ -2,7 +2,7 @@
   {
     "name": "ios_system",
     "path": "ios_system.framework",
-    "sha256": "98589c05d2e19f9c54519756659326bc8f3426ddac8466c30c3a487fb77da78e",
+    "sha256": "5158731b4fd50178bb927b1df8c02924b4f1c6a2099d3cc2b8f8745f8907a0da",
     "commands": []
   },
   {
@@ -14,7 +14,7 @@
   {
     "name": "files",
     "path": "files.framework",
-    "sha256": "493469666cb201e5c6957f87c450f0e05e4ca2586ce8248573b0e135f8c81c9d",
+    "sha256": "a2e14eefa28bde8b5d3dc4057598b826b061e7f2b7c55defe66683db3dbe6225",
     "commands": []
   },
   {
