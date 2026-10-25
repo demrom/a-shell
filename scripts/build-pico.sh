@@ -93,7 +93,7 @@ PLIST
     cp "$build/downloads/ios-system-LICENSE" "$framework/Resources/ios-system-LICENSE"
     lipo "$framework/pico" -verify_arch "$arch"
     nm -gU "$framework/pico" | grep ' _main$' >/dev/null
-    if nm -u "$framework/pico" | grep -E ' _(exit|_exit|fork|vfork|system|printf|putchar|puts)$' >/dev/null; then
+    if nm -j -u "$framework/pico" | grep -Ex '_(exit|_exit|fork|vfork|system|printf|putchar|puts)' >/dev/null; then
       echo 'Pico imports a process-global entry point' >&2
       exit 1
     fi
