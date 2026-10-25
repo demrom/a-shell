@@ -7,6 +7,9 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		E70200000000000000000003 /* TmuxNative.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E70200000000000000000001 /* TmuxNative.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E70200000000000000000006 /* TmuxHost.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E70200000000000000000004 /* TmuxHost.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		E70200000000000000000009 /* TmuxAcceptance.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = E70200000000000000000007 /* TmuxAcceptance.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A2B1818A0000000000000001 /* Herdr LICENSE in Resources */ = {isa = PBXBuildFile; fileRef = A2B1818A0000000000000002 /* Herdr LICENSE */; };
 		2203367A28C4B8070027664C /* pico.framework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = 2232245E289695A9001BAE04 /* pico.framework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		22068CC62F51C11A004307F7 /* TerminalView+KeyCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = 22068CC52F51BFCE004307F7 /* TerminalView+KeyCommands.swift */; };
@@ -1378,6 +1381,9 @@
 			dstPath = "";
 			dstSubfolderSpec = 10;
 			files = (
+				E70200000000000000000006 /* TmuxHost.xcframework in Embed Frameworks */,
+				E70200000000000000000009 /* TmuxAcceptance.xcframework in Embed Frameworks */,
+				E70200000000000000000003 /* TmuxNative.xcframework in Embed Frameworks */,
 				2269076E2F97BBD20071F551 /* curl-impersonate.framework in Embed Frameworks */,
 				22D1424B2E62091700E76E2E /* Python.framework in Embed Frameworks */,
 				22D1424C2E62091700E76E2E /* Python-_cffi_backend.framework in Embed Frameworks */,
@@ -2197,6 +2203,9 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		E70200000000000000000001 /* TmuxNative.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "tmux/build/TmuxNative.xcframework"; sourceTree = SOURCE_ROOT; };
+		E70200000000000000000004 /* TmuxHost.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "tmux/build/TmuxHost.xcframework"; sourceTree = SOURCE_ROOT; };
+		E70200000000000000000007 /* TmuxAcceptance.xcframework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.xcframework; path = "tmux/build/TmuxAcceptance.xcframework"; sourceTree = SOURCE_ROOT; };
 		A2B1818A0000000000000002 /* Herdr LICENSE */ = {isa = PBXFileReference; lastKnownFileType = text; name = "Herdr LICENSE"; path = Herdr/LICENSE; sourceTree = SOURCE_ROOT; };
 		22068CC52F51BFCE004307F7 /* TerminalView+KeyCommands.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "TerminalView+KeyCommands.swift"; sourceTree = "<group>"; };
 		2208ACBE22CCE57E003985D6 /* String+C.swift */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.swift; name = "String+C.swift"; path = "Util/String+C.swift"; sourceTree = SOURCE_ROOT; };
@@ -3370,6 +3379,9 @@
 		22984EE122C93DBC00069497 = {
 			isa = PBXGroup;
 			children = (
+				E70200000000000000000004 /* TmuxHost.xcframework */,
+				E70200000000000000000007 /* TmuxAcceptance.xcframework */,
+				E70200000000000000000001 /* TmuxNative.xcframework */,
 				A2B1818A0000000000000002 /* Herdr LICENSE */,
 				220F36512BC458C800842FEE /* PrivacyInfo.xcprivacy */,
 				223FC3CA2611F9C300CDC89F /* wasm.html */,
