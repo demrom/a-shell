@@ -869,13 +869,13 @@ private final class BackgroundMode: NSObject, ObservableObject, CLLocationManage
         let hidden = manager.authorizationStatus == .authorizedAlways && precise
         let pill: String
         if !enabled {
-            pill = "hidden (background mode is off)"
+            pill = "background mode is off"
         } else if hidden {
-            pill = "hidden (Always + precise)"
+            pill = "hidden requested (Always + precise)"
         } else {
-            pill = "shown (reduced accuracy or When In Use keeps the session visible)"
+            pill = "visible requested (reduced accuracy or When In Use)"
         }
-        status = "mode: \(enabled ? "on" : "off")\nauthorization: \(authorization)\naccuracy: \(precise ? "precise (100 m requested)" : "reduced (iOS setting)")\npill: \(pill)\nAccuracy follows Precise Location in iOS Settings. Precise updates can use more battery.\n\(detail)"
+        status = "mode: \(enabled ? "on" : "off")\nauthorization: \(authorization)\naccuracy: \(precise ? "precise (100 m requested)" : "reduced (iOS setting)")\nindicator policy: \(pill); iOS controls display\nAccuracy follows Precise Location in iOS Settings. Precise updates can use more battery.\n\(detail)"
     }
 
     @objc func refresh() {
@@ -1020,7 +1020,7 @@ private struct BackgroundSettings: View {
     var body: some View {
         NavigationView {
             Form {
-                Section(footer: Text("Keeps the location session active for long scripts that use location. Accuracy follows Precise Location in iOS Settings. Precise updates can use more battery. The location pill is hidden only with Always permission and Precise Location on; reduced accuracy or When In Use keeps it visible. iOS can still terminate the app.")) {
+                Section(footer: Text("Keeps the location session active for long scripts that use location. Accuracy follows Precise Location in iOS Settings. Precise updates can use more battery. With Always permission and Precise Location on, a-Shell requests a hidden location indicator; otherwise it requests a visible one. iOS controls the actual display. iOS can still terminate the app.")) {
                     Toggle("Background mode", isOn: Binding(get: { mode.enabled }, set: { mode.setEnabled($0) }))
                         .accessibilityIdentifier("background-mode")
                     Text(mode.status)
