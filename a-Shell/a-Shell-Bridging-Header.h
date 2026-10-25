@@ -3,3 +3,5 @@
 //
 
 #import "KBWebViewBase.h"
+
+#import "../ShellWorkers/PaneWire.h"
