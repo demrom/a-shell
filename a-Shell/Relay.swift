@@ -161,6 +161,7 @@ struct RelayConfiguration: Codable {
         func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         let clientOptions = mutualTLS ? " --cert client.pem --key client.key" : ""
         let header = mutualTLS ? "\"X-Token: $RELAY_TOKEN\"" : quoted("X-Token: " + token)
+        let host = bind == "0.0.0.0" || bind == "::" ? host : bind
         let address = host.contains(":") ? "[\(host)]" : host
         return "curl --cacert .relay-cert.pem\(clientOptions) --resolve \(quoted("relay.local:\(port):\(address)")) -H \(header) --data-binary \(quoted(command)) https://relay.local:\(port)/run"
     }
@@ -200,8 +201,7 @@ struct RelayConfiguration: Codable {
         if bind == "127.0.0.1" || bind == "::1" {
             lines.append("Mac access: change bind to 0.0.0.0 or :: in the config and run relay on")
         }
-        let effectiveHost = bind == "0.0.0.0" || bind == "::" ? host : bind
-        lines.append("Mac curl: " + connectCommand(host: effectiveHost))
+        lines.append("Mac curl: " + connectCommand(host: host))
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -314,17 +314,18 @@ final class LocalHTTPServer {
             self.connections[id] = connection
             self.receiving.insert(id)
             connection.stateUpdateHandler = { [weak self, weak connection] state in
-                guard let self, let connection else { return }
+                guard let self else { return }
+                let current = connection
                 switch state {
                 case .ready:
                     self.activeConnections.insert(id)
-                    self.connectionChanged?(connection, true)
+                    if let current { self.connectionChanged?(current, true) }
                     if self.listener != nil { self.stateChanged?(self.activeConnections.count) }
                 case .failed, .cancelled:
                     self.connections.removeValue(forKey: id)
                     self.receiving.remove(id)
                     self.activeConnections.remove(id)
-                    self.connectionChanged?(connection, false)
+                    if let current { self.connectionChanged?(current, false) }
                     if self.listener != nil { self.stateChanged?(self.activeConnections.count) }
                 default: break
                 }
@@ -441,13 +442,12 @@ final class RelayServer {
     private var clients: [String: ServiceIndicator.Client] = [:]
     private var clientIDs: [ObjectIdentifier: String] = [:]
     private var histories: Set<ObjectIdentifier> = []
-    var clientSnapshot: [ServiceIndicator.Client] { queue.sync { Array(clients.values) } }
+    var clientSnapshot: [ServiceIndicator.Client] { queue.sync { clients.values.sorted { $0.since > $1.since } } }
 
     private func track(_ connection: NWConnection, open: Bool, command: String? = nil) {
         let identity = ObjectIdentifier(connection)
         if !open {
             if let key = clientIDs.removeValue(forKey: identity), !clientIDs.values.contains(key) { clients[key]?.open = false }
-            finishHistory(connection, status: nil)
             return
         }
         let address: String
@@ -468,15 +468,20 @@ final class RelayServer {
         clientIDs[identity] = key
         var client = clients[key] ?? ServiceIndicator.Client(id: key, address: address, subject: subject, fingerprint: fingerprint, since: Date(), open: true)
         client.open = true
-        if let command { client.command = command; client.since = Date() }
+        if let command { client.command = Self.commandSummary(command); client.since = Date() }
         clients[key] = client
         if clients.count > 8, let oldest = clients.values.filter({ !$0.open }).min(by: { $0.since < $1.since }) { clients.removeValue(forKey: oldest.id) }
+    }
+
+    private static func commandSummary(_ command: String) -> String {
+        let first = command.split(whereSeparator: { $0.isNewline }).first.map(String.init) ?? ""
+        return String(first.prefix(256)) + (first.count > 256 || command.contains(where: { $0.isNewline }) ? "…" : "")
     }
 
     private func beginHistory(_ connection: NWConnection, command: String) {
         guard let key = clientIDs[ObjectIdentifier(connection)], let client = clients[key] else { return }
         histories.insert(ObjectIdentifier(connection))
-        var value: [String: Any] = ["phase": "begin", "session": String(describing: ObjectIdentifier(connection)), "address": client.address, "command": command]
+        var value: [String: Any] = ["phase": "begin", "session": String(describing: ObjectIdentifier(connection)), "address": client.address, "command": Self.commandSummary(command)]
         value["subject"] = client.subject; value["fingerprint"] = client.fingerprint
         NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil, userInfo: value)
     }
@@ -503,7 +508,9 @@ final class RelayServer {
         }
         http.stateChanged = stateChanged
         #if os(iOS)
-        http.connectionChanged = { [weak self] connection, open in self?.track(connection, open: open) }
+        http.connectionChanged = { [weak self] connection, open in
+            if !open { self?.track(connection, open: false) }
+        }
         #endif
     }
 
@@ -513,7 +520,18 @@ final class RelayServer {
         try http.start(parameters: parameters, ready: ready)
     }
 
-    func stop(_ stopped: @escaping () -> Void) { http.stop(stopped) }
+    func stop(_ stopped: @escaping () -> Void) {
+        queue.async {
+            #if os(iOS)
+            for identity in self.histories {
+                NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil,
+                    userInfo: ["phase": "end", "session": String(describing: identity)])
+            }
+            self.histories.removeAll()
+            #endif
+            self.http.stop(stopped)
+        }
+    }
 
     private func route(_ connection: NWConnection, method: String, target: String, headers: [String: String], body: Data) {
         let expected = Array(configuration.token.utf8), given = Array((headers["x-token"] ?? "").utf8)
@@ -627,15 +645,15 @@ final class Relay: ObservableObject {
     private var state = "stopped"
     private let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
 
+    private let commandLock = NSLock()
+    private var commandConfiguration: RelayConfiguration?
+
     func connectCommand(host: String, command: String = "pwd") -> String {
-        queue.sync {
-            guard var configuration = try? RelayConfiguration.load(from: directory) else { return "" }
-            if let server {
-                configuration = server.configuration
-                if let port = server.port { configuration.port = port }
-            }
-            return configuration.connectCommand(host: host, command: command)
-        }
+        commandLock.lock()
+        let configuration = commandConfiguration
+        commandLock.unlock()
+        guard let configuration, configuration.port != 0 else { return "" }
+        return configuration.connectCommand(host: host, command: command)
     }
 
     func restore() {
@@ -751,10 +769,18 @@ final class Relay: ObservableObject {
         do { port = try startup.get() }
         catch { server.stop({}); throw error }
         self.server = server
+        var effective = configuration
+        effective.port = port
+        commandLock.lock()
+        commandConfiguration = effective
+        commandLock.unlock()
         state = "listening on \(configuration.bind):\(port), mTLS \(configuration.mutualTLS ? "on" : "off")"
     }
 
     private func stop() {
+        commandLock.lock()
+        commandConfiguration = nil
+        commandLock.unlock()
         indicatorGeneration = UUID()
         updateIndicator(nil)
         if let server {
@@ -806,7 +832,7 @@ final class Relay: ObservableObject {
             "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
         ], stop: { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
-        }, port: port, listen: bind == "::" || bind == "0.0.0.0" ? nil : bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: connections, clients: clients))
+        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: connections, clients: clients))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
@@ -922,6 +948,7 @@ public func relayMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutableP
 @_cdecl("ashell_relay_connect_command")
 public func relayConnectCommand(_ host: UnsafePointer<CChar>?, _ route: UnsafePointer<CChar>?, _ command: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
     guard let host, let route, String(cString: route) == "/run" else { return nil }
-    return strdup(Relay.shared.connectCommand(host: String(cString: host), command: command.map { String(cString: $0) } ?? "pwd"))
+    let result = Relay.shared.connectCommand(host: String(cString: host), command: command.map { String(cString: $0) } ?? "pwd")
+    return result.isEmpty ? nil : strdup(result)
 }
 #endif
