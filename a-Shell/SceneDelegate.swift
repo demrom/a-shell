@@ -1479,7 +1479,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                     return
                 }
                 let command = kind == .ssh
-                    ? (enabled ? services.lastSSHPort.map { "sshd -p \($0) on" } ?? "sshd on" : "sshd off")
+                    ? (enabled ? "sshd on" : "sshd off")
                     : (enabled ? "relay on" : "relay off")
                 // Replace the idle prompt with the state line, then redraw its draft once.
                 self.commandQueue.async {
@@ -1688,6 +1688,20 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                                 symbols.accessibilityLabel = "Period"
                                 button = symbols
                                 activeButtonGroup = [symbols]
+                            } else if iconName == "." {
+                                let symbols = activeButtonGroup
+                                let period = UIBarButtonItem(title: ".", style: .plain, target: self, action: #selector(insertString(_:)))
+                                period.possibleTitles = ["", "."]
+                                period.accessibilityLabel = "Period"
+                                period.accessibilityCustomActions = symbols.compactMap { item in
+                                    guard let value = title(item) else { return nil }
+                                    return UIAccessibilityCustomAction(name: value) { [weak self] _ in
+                                        self?.insertString(item)
+                                        return self != nil
+                                    }
+                                }
+                                button = period
+                                activeButtonGroup = [period]
                             }
                             button!.tag = activeTag
                             if #available(iOS 16.0, *) {
@@ -2258,8 +2272,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                 for button in editorToolbar.items! {
                     if let buttonView = button.toolbarView {
                         if (buttonView == sender.view) {
-                            if title(button) == "up.down.left.right" { tapArrow(from: sender.view) }
-                            else { systemAction(button) }
+                            systemAction(button)
                             return
                         }
                     }
@@ -2270,8 +2283,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                         for button in leftButtonGroup.barButtonItems {
                             if let buttonView = button.toolbarView {
                                 if (buttonView == sender.view) {
-                                    if title(button) == "up.down.left.right" { tapArrow(from: sender.view) }
-                                    else { systemAction(button) }
+                                    systemAction(button)
                                     return
                                 }
                             }
@@ -2284,8 +2296,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                     for button in rightButtonGroup.barButtonItems {
                         if let buttonView = button.toolbarView {
                             if (buttonView == sender.view) {
-                                if title(button) == "up.down.left.right" { tapArrow(from: sender.view) }
-                                else { systemAction(button) }
+                                systemAction(button)
                                 return
                             }
                         }
@@ -2357,6 +2368,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
         if (continuousButtonTimer.isValid) {
             return
         }
+        if sender.state == .began { hideKeyboard() }
     }
     
     public lazy var emptyToolbar: UIToolbar = {
@@ -2420,6 +2432,13 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
             if (rightButtonGroup.count > 0) {
                 toolbar.items?.append(contentsOf: rightButtonGroup)
             }
+        }
+        if UIDevice.current.userInterfaceIdiom != .phone || !(toolbar.items ?? []).contains(where: { title($0) == "hideKeyboard" }) {
+            let hold = UILongPressGestureRecognizer(target: self, action: #selector(longPressAction(_:)))
+            hold.minimumPressDuration = 1.0
+            hold.allowableMovement = 15
+            hold.delegate = self
+            toolbar.addGestureRecognizer(hold)
         }
         return toolbar
     }()
@@ -5337,6 +5356,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                     || title(button) == "up.down" || title(button) == "left.right" || title(button) == "up.down.left.right" {
                     if let buttonView = button.toolbarView {
                         if buttonView.gestureRecognizers?.contains(where: { $0.name == "arrow-hold" }) == true { returnValue = true; continue }
+                        (buttonView as? UIButton)?.removeTarget(nil, action: nil, for: .touchUpInside)
                         let tapGesture = UITapGestureRecognizer(target: self, action: #selector(self.tapAction(_:)))
                         tapGesture.delegate = self
                         buttonView.addGestureRecognizer(tapGesture)
@@ -5360,6 +5380,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                             || title(button) == "up.down" || title(button) == "left.right" || title(button) == "up.down.left.right" {
                             if let buttonView = button.toolbarView {
                                 if buttonView.gestureRecognizers?.contains(where: { $0.name == "arrow-hold" }) == true { returnValue = true; continue }
+                        (buttonView as? UIButton)?.removeTarget(nil, action: nil, for: .touchUpInside)
                                 let tapGesture = UITapGestureRecognizer(target: self, action: #selector(self.tapAction(_:)))
                                 tapGesture.delegate = self
                                 buttonView.addGestureRecognizer(tapGesture)
@@ -5383,6 +5404,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                             || title(button) == "up.down" || title(button) == "left.right" || title(button) == "up.down.left.right" {
                             if let buttonView = button.toolbarView {
                                 if buttonView.gestureRecognizers?.contains(where: { $0.name == "arrow-hold" }) == true { returnValue = true; continue }
+                        (buttonView as? UIButton)?.removeTarget(nil, action: nil, for: .touchUpInside)
                                 if (!returnValue) {
                                     NSLog("activating long press for \(title(button)). view= \(buttonView)")
                                 }

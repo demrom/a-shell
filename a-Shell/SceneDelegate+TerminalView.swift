@@ -906,6 +906,7 @@ extension SceneDelegate {
                         terminalView?.feed(text: history[historyPosition])
                         commandBeforeCursor = history[historyPosition]
                         commandAfterCursor = ""
+                        synchronizeRecalledInputContext(source)
                         delayedVoiceOver(message: commandBeforeCursor)
                     }
                 } else {
@@ -918,12 +919,10 @@ extension SceneDelegate {
                         terminalView?.feed(text: commandHistory[commandHistoryPosition])
                         commandBeforeCursor = commandHistory[commandHistoryPosition]
                         commandAfterCursor = ""
+                        synchronizeRecalledInputContext(source)
                         delayedVoiceOver(message: commandBeforeCursor)
                     }
                 }
-            }
-            if !autocompleteRunning {
-                synchronizeRecalledInputContext(source)
             }
         case "\u{000E}": // control N
             fallthrough
@@ -950,7 +949,8 @@ extension SceneDelegate {
                             terminalView?.feed(text: history[historyPosition])
                             commandBeforeCursor = history[historyPosition]
                             commandAfterCursor = ""
-                            delayedVoiceOver(message: commandBeforeCursor)
+                            synchronizeRecalledInputContext(source)
+                        delayedVoiceOver(message: commandBeforeCursor)
                         }
                     } else {
                         historyPosition = history.count
@@ -973,7 +973,8 @@ extension SceneDelegate {
                             terminalView?.feed(text: commandHistory[commandHistoryPosition])
                             commandBeforeCursor = commandHistory[commandHistoryPosition]
                             commandAfterCursor = ""
-                            delayedVoiceOver(message: commandBeforeCursor)
+                            synchronizeRecalledInputContext(source)
+                        delayedVoiceOver(message: commandBeforeCursor)
                         }
                     } else {
                         commandHistoryPosition = commandHistory.count
@@ -983,12 +984,10 @@ extension SceneDelegate {
                         terminalView?.updateDisplay()
                         commandBeforeCursor = ""
                         commandAfterCursor = ""
+                        synchronizeRecalledInputContext(source)
                         delayedVoiceOver(message: " empty line ")
                     }
                 }
-            }
-            if !autocompleteRunning {
-                synchronizeRecalledInputContext(source)
             }
         case "\u{0002}": // control B
             fallthrough

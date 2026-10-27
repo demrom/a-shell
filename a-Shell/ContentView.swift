@@ -47,14 +47,18 @@ struct ServiceStatus: Identifiable, Equatable {
     var listen: String?
     var fingerprint: String
     var mutualTLS: Bool?
-    var bonjourName: String?
-    var bonjourError: Bool
     var clients: [ServiceClient]
     var stop: () -> Void
+    var account: String = "mobile"
     var reportedClientCount: Int? = nil
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.bonjourName == rhs.bonjourName && lhs.bonjourError == rhs.bonjourError && lhs.clients == rhs.clients
+        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients
+    }
+
+    func sshCommand(host: String) -> String {
+        let quote: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        return "ssh -p \(port) \(quote(account + "@" + host))"
     }
 
     var title: String { kind == .ssh ? "SSH" : "Relay" }
@@ -116,12 +120,12 @@ public func sshdError(_ message: UnsafePointer<CChar>?) {
 }
 
 @_cdecl("ashell_sshd_print_addresses")
-public func sshdPrintAddresses(_ port: Int32) {
+public func sshdPrintAddresses(_ port: Int32, _ user: UnsafePointer<CChar>?) {
     let read = {
         let services = ServiceIndicators.shared
         guard let ssh = services.items.first(where: { $0.kind == .ssh }) else { return "" }
         return services.networks.addresses(for: ssh).map {
-            "\($0.label): ssh -p \(port) mobile@\($0.address)\n"
+            "\($0.label): \(ssh.sshCommand(host: $0.address))\n"
         }.joined()
     }
     let output = Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
@@ -129,7 +133,7 @@ public func sshdPrintAddresses(_ port: Int32) {
 }
 
 @_cdecl("ashell_sshd_state_v2")
-public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ bonjour: UnsafePointer<CChar>?, _ bonjourError: Int32, _ count: Int32, _ peers: UnsafePointer<UnsafePointer<CChar>?>?, _ users: UnsafePointer<UnsafePointer<CChar>?>?, _ since: UnsafePointer<Int64>?, _ kinds: UnsafePointer<Int32>?, _ commands: UnsafePointer<UnsafePointer<CChar>?>?, _ keyNames: UnsafePointer<UnsafePointer<CChar>?>?, _ keyFingerprints: UnsafePointer<UnsafePointer<CChar>?>?, _ stop: (@convention(c) () -> Void)?) {
+public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ account: UnsafePointer<CChar>?, _ reserved: Int32, _ count: Int32, _ peers: UnsafePointer<UnsafePointer<CChar>?>?, _ users: UnsafePointer<UnsafePointer<CChar>?>?, _ since: UnsafePointer<Int64>?, _ kinds: UnsafePointer<Int32>?, _ commands: UnsafePointer<UnsafePointer<CChar>?>?, _ keyNames: UnsafePointer<UnsafePointer<CChar>?>?, _ keyFingerprints: UnsafePointer<UnsafePointer<CChar>?>?, _ stop: (@convention(c) () -> Void)?) {
     guard running != 0 else { ServiceIndicators.shared.remove(id: "ssh"); return }
     // The C arrays are borrowed only for this call. Copy before publishing asynchronously.
     var clients: [ServiceClient] = []
@@ -147,12 +151,13 @@ public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<C
             keyName: keyNames?[index].map { String(cString: $0) }, keyFingerprint: keyFingerprints?[index].map { String(cString: $0) }))
     }
     let address = listen.map { String(cString: $0) }
+    let user = account.map { String(cString: $0) } ?? "mobile"
     DispatchQueue.main.async {
         if ServiceIndicators.shared.controlError?.hasPrefix("sshd:") == true { ServiceIndicators.shared.controlError = nil }
     }
-    ServiceIndicators.shared.set(ServiceStatus(kind: .ssh, port: Int(port), listen: address == "::" || address == "0.0.0.0" ? nil : address,
+    ServiceIndicators.shared.set(ServiceStatus(kind: .ssh, port: Int(port), listen: address,
         fingerprint: fingerprint.map { String(cString: $0) } ?? "unavailable", mutualTLS: nil,
-        bonjourName: bonjour.map { String(cString: $0) }, bonjourError: bonjourError != 0, clients: clients, stop: { stop?() }))
+        clients: clients, stop: { stop?() }, account: user))
 }
 
 @_cdecl("ashell_sshd_event")
@@ -180,7 +185,6 @@ final class ServiceIndicators: ObservableObject {
     static let shared = ServiceIndicators()
     @Published private(set) var items: [ServiceStatus] = []
     let networks = ServiceNetworks()
-    private(set) var lastSSHPort: Int?
     @Published var controlError: String?
 
     private var relayHistory: AnyCancellable?
@@ -212,12 +216,11 @@ final class ServiceIndicators: ObservableObject {
 
     func set(_ item: ServiceIndicator) {
         guard item.id == "relay" else { return }
-        set(ServiceStatus(kind: .relay, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, bonjourName: nil, bonjourError: false, clients: item.clients.map { ServiceClient(id: $0.id, address: $0.address, activity: $0.command.map { .command($0) } ?? .signedIn, certificateSubject: $0.subject, since: $0.since, open: $0.open, certificateFingerprint: $0.fingerprint) }, stop: { item.stop?() }, reportedClientCount: item.activeClientCount))
+        set(ServiceStatus(kind: .relay, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: item.clients.map { ServiceClient(id: $0.id, address: $0.address, activity: $0.command.map { .command($0) } ?? .signedIn, certificateSubject: $0.subject, since: $0.since, open: $0.open, certificateFingerprint: $0.fingerprint) }, stop: { item.stop?() }, reportedClientCount: item.activeClientCount))
     }
 
     func set(_ item: ServiceStatus) {
         publish {
-            if item.kind == .ssh { self.lastSSHPort = item.port }
             var items = self.items.filter { $0.id != item.id }
             items.append(item)
             items.sort { $0.kind == .ssh && $1.kind != .ssh }
@@ -401,7 +404,11 @@ final class ServiceNetworks: ObservableObject {
 
     func addresses(for service: ServiceStatus) -> [ServiceAddress] {
         let candidates = addresses.filter { entry in
-            if let listen = service.listen { return entry.address == listen }
+            if let listen = service.listen {
+                if listen == "0.0.0.0" { return !entry.loopback && !entry.address.contains(":") }
+                if listen == "::" { return !entry.loopback }
+                return entry.address == listen
+            }
             return !entry.loopback
         }
         var interfaces = Set<String>()
@@ -409,7 +416,7 @@ final class ServiceNetworks: ObservableObject {
     }
 
     func bestAddress(for service: ServiceStatus) -> ServiceAddress? {
-        let candidates = addresses.filter { service.listen == nil || service.listen == $0.address }
+        let candidates = addresses(for: service)
         func rank(_ address: ServiceAddress) -> Int {
             if address.name == "Wi-Fi LAN" { return 0 }
             if address.name == "USB / Ethernet" { return 1 }
@@ -539,7 +546,7 @@ private struct ServiceDetailsForm: View {
                     Section {
                         if let item = services.items.first(where: { $0.kind == kind }) {
                             if let address = networks.bestAddress(for: item) {
-                                ServiceAddressRow(address: address, command: item.kind == .ssh ? "ssh -p \(item.port) mobile@\(address.address)" : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
+                                ServiceAddressRow(address: address, command: item.kind == .ssh ? item.sshCommand(host: address.address) : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
                                     .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
                             }
                             NavigationLink {
@@ -627,14 +634,14 @@ private struct ServicePage: View {
                 ServiceSection(item: item, addresses: networks.addresses(for: item), authorizedKeys: authorizedKeys)
                 if kind == .ssh, let address = networks.bestAddress(for: item) {
                     Section {
-                        let command = "ssh -p \(item.port) mobile@\(address.address)"
+                        let command = item.sshCommand(host: address.address)
                         Button { UIPasteboard.general.string = command } label: {
                             Text(command).font(.footnote.monospaced()).fixedSize(horizontal: false, vertical: true)
                         }.buttonStyle(.plain).accessibilityIdentifier("ssh-help-connect")
-                        Text("On the Mac: cat ~/.ssh/id_ed25519.pub").font(.footnote.monospaced()).textSelection(.enabled)
-                        Text("On this iPhone: chmod 700 ~/Documents/.ssh; chmod 600 ~/Documents/.ssh/authorized_keys").font(.footnote.monospaced()).textSelection(.enabled)
+                        Text("On the client: cat ~/.ssh/id_ed25519.pub").font(.footnote.monospaced()).textSelection(.enabled)
+                        Text("On this device: chmod 700 ~/Documents/.ssh; chmod 600 ~/Documents/.ssh/authorized_keys").font(.footnote.monospaced()).textSelection(.enabled)
                     } header: { Text("How to connect") } footer: {
-                        Text("Copy your Mac's public key line into ~/Documents/.ssh/authorized_keys on this iPhone, then set the permissions above. Keep the private key on the Mac. Tap an address above to copy its ssh command.")
+                        Text("Copy your Mac's public key line into ~/Documents/.ssh/authorized_keys on this device, then set the permissions above. Keep the private key on the Mac. Tap an address above to copy its ssh command.")
                     }
                 }
                 if kind == .relay, let address = networks.bestAddress(for: item) {
@@ -653,7 +660,7 @@ private struct ServicePage: View {
                         }
                         Text("relay on | off | status | tokens").font(.footnote.monospaced()).textSelection(.enabled)
                     } header: { Text("How to connect") } footer: {
-                        Text(item.mutualTLS == true ? "On this iPhone, run relay tokens. On the Mac, set RELAY_TOKEN to that value and keep .relay-cert.pem, client.pem and client.key in the current folder. Tap an example to copy it." : "Copy .relay-cert.pem from this app's Documents to the Mac over a trusted channel. Run the copied command from that folder; it includes the token.")
+                        Text(item.mutualTLS == true ? "On this device, run relay tokens. On the client, set RELAY_TOKEN to that value and keep .relay-cert.pem, client.pem and client.key in the current folder. Tap an example to copy it." : "Copy .relay-cert.pem from this app's Documents to the Mac over a trusted channel. Run the copied command from that folder; it includes the token.")
                     }
                     if RemoteRelay.termAvailable {
                     Section {
@@ -803,14 +810,9 @@ private struct ServiceSection: View {
                 LabeledContent("Server fingerprint") { fingerprint }
             }
             ForEach(addresses) { address in
-                ServiceAddressRow(address: address, command: item.kind == .ssh ? "ssh -p \(item.port) mobile@\(address.address)" : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
+                ServiceAddressRow(address: address, command: item.kind == .ssh ? item.sshCommand(host: address.address) : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
             }
-            if item.bonjourError {
-                Text("Local Network access is off")
-                Button("Open Settings") {
-                    if let url = URL(string: UIApplication.openSettingsURLString) { UIApplication.shared.open(url) }
-                }
-            } else if let name = item.bonjourName { LabeledContent("Local name", value: name) }
+
         } footer: {
             Text("On the same Wi-Fi, use the Wi-Fi address. Elsewhere, the VPN address works only when both devices use the same VPN and it allows connections between devices, such as Tailscale or WireGuard. No app setting is needed. Use IPv6 only if the client has IPv6.")
             if item.kind == .ssh {
