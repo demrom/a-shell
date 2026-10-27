@@ -63,7 +63,7 @@ antenna.radiowaves.left.and.right	systemAction		remoteAccess
 network						systemAction		showBrowser
 
 # Arrows:
-# This is the default on iPhones:
+# On iOS 26 iPhones with VoiceOver off:
 # Swipe for one arrow. Keep holding after the swipe to repeat.
 # A tap sends nothing.
 arrow.up.and.down.and.arrow.left.and.right		systemAction	up.down.left.right

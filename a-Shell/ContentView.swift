@@ -120,7 +120,7 @@ public func sshdError(_ message: UnsafePointer<CChar>?) {
 }
 
 @_cdecl("ashell_sshd_print_addresses")
-public func sshdPrintAddresses(_ port: Int32, _ user: UnsafePointer<CChar>?) {
+public func sshdPrintAddresses() {
     let read = {
         let services = ServiceIndicators.shared
         guard let ssh = services.items.first(where: { $0.kind == .ssh }) else { return "" }
@@ -133,7 +133,7 @@ public func sshdPrintAddresses(_ port: Int32, _ user: UnsafePointer<CChar>?) {
 }
 
 @_cdecl("ashell_sshd_state_v2")
-public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ account: UnsafePointer<CChar>?, _ reserved: Int32, _ count: Int32, _ peers: UnsafePointer<UnsafePointer<CChar>?>?, _ users: UnsafePointer<UnsafePointer<CChar>?>?, _ since: UnsafePointer<Int64>?, _ kinds: UnsafePointer<Int32>?, _ commands: UnsafePointer<UnsafePointer<CChar>?>?, _ keyNames: UnsafePointer<UnsafePointer<CChar>?>?, _ keyFingerprints: UnsafePointer<UnsafePointer<CChar>?>?, _ stop: (@convention(c) () -> Void)?) {
+public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ account: UnsafePointer<CChar>?, _ count: Int32, _ peers: UnsafePointer<UnsafePointer<CChar>?>?, _ users: UnsafePointer<UnsafePointer<CChar>?>?, _ since: UnsafePointer<Int64>?, _ kinds: UnsafePointer<Int32>?, _ commands: UnsafePointer<UnsafePointer<CChar>?>?, _ keyNames: UnsafePointer<UnsafePointer<CChar>?>?, _ keyFingerprints: UnsafePointer<UnsafePointer<CChar>?>?, _ stop: (@convention(c) () -> Void)?) {
     guard running != 0 else { ServiceIndicators.shared.remove(id: "ssh"); return }
     // The C arrays are borrowed only for this call. Copy before publishing asynchronously.
     var clients: [ServiceClient] = []
@@ -641,7 +641,7 @@ private struct ServicePage: View {
                         Text("On the client: cat ~/.ssh/id_ed25519.pub").font(.footnote.monospaced()).textSelection(.enabled)
                         Text("On this device: chmod 700 ~/Documents/.ssh; chmod 600 ~/Documents/.ssh/authorized_keys").font(.footnote.monospaced()).textSelection(.enabled)
                     } header: { Text("How to connect") } footer: {
-                        Text("Copy your Mac's public key line into ~/Documents/.ssh/authorized_keys on this device, then set the permissions above. Keep the private key on the Mac. Tap an address above to copy its ssh command.")
+                        Text("Copy the client's public key line into ~/Documents/.ssh/authorized_keys on this device, then set the permissions above. Keep the private key on the client. Tap an address above to copy its ssh command.")
                     }
                 }
                 if kind == .relay, let address = networks.bestAddress(for: item) {
@@ -660,7 +660,7 @@ private struct ServicePage: View {
                         }
                         Text("relay on | off | status | tokens").font(.footnote.monospaced()).textSelection(.enabled)
                     } header: { Text("How to connect") } footer: {
-                        Text(item.mutualTLS == true ? "On this device, run relay tokens. On the client, set RELAY_TOKEN to that value and keep .relay-cert.pem, client.pem and client.key in the current folder. Tap an example to copy it." : "Copy .relay-cert.pem from this app's Documents to the Mac over a trusted channel. Run the copied command from that folder; it includes the token.")
+                        Text(item.mutualTLS == true ? "On this device, run relay tokens. On the client, set RELAY_TOKEN to that value and keep .relay-cert.pem, client.pem and client.key in the current folder. Tap an example to copy it." : "Copy .relay-cert.pem from this app's Documents to the client over a trusted channel. Run the copied command from that folder; it includes the token.")
                     }
                     if RemoteRelay.termAvailable {
                     Section {
@@ -697,7 +697,7 @@ private struct ServicePage: View {
                                 }.buttonStyle(.plain)
                             }
                             Text("Copy .relay-client-ca.der to this app's Documents, then run relay off and relay on. This replaces the trusted client CA; clients signed by the previous CA will no longer connect.")
-                            Text("Copy .relay-cert.pem from this app's Documents to the Mac over USB or another trusted channel. Keep client.key on the Mac.")
+                            Text("Copy .relay-cert.pem from this app's Documents to the client over USB or another trusted channel. Keep client.key on the Mac.")
                         } header: { Text("Certificates") }
                     }
                 }

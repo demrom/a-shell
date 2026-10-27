@@ -35,7 +35,7 @@ static struct {
     int (*close_stdin)(void *);
     int (*interrupt)(void *);
     void (*release)(void *);
-    void (*state)(int, int, const char *, const char *, const char *, int, int, const char *const *, const char *const *, const long long *, const int *, const char *const *, const char *const *, const char *const *, void (*)(void));
+    void (*state)(int, int, const char *, const char *, const char *, int, const char *const *, const char *const *, const long long *, const int *, const char *const *, const char *const *, const char *const *, void (*)(void));
     void (*event)(const char *, const char *, const char *, const char *, const char *, const char *, long long, const char *, int);
 } host;
 
@@ -109,7 +109,7 @@ static void indicator_locked(void) {
         key_names[count] = c->key_comment; key_fingerprints[count] = c->key_fingerprint;
         since[count] = (long long)c->since; kinds[count] = c->kind; count++;
     }
-    if (host.state) host.state(atomic_load(&running), listen_port, listen_address, fingerprint, account, 0, count, peers, users, since, kinds, commands, key_names, key_fingerprints, stop_from_indicator);
+    if (host.state) host.state(atomic_load(&running), listen_port, listen_address, fingerprint, account, count, peers, users, since, kinds, commands, key_names, key_fingerprints, stop_from_indicator);
 }
 
 static void client_event(Client *c, const char *phase, const char *text) {
@@ -457,7 +457,6 @@ static void *accept_clients(void *unused) {
         if (!getnameinfo((struct sockaddr *)&address, length, peer, sizeof(peer), port, sizeof(port), NI_NUMERICHOST | NI_NUMERICSERV))
             snprintf(c->peer, sizeof(c->peer), address.ss_family == AF_INET6 ? "[%s]:%s" : "%s:%s", peer, port);
         c->since = time(NULL);
-        client_event(c, "connect", "");
         strcpy(c->term, "xterm-256color");
         c->session = ssh_new();
         long timeout = 5;
@@ -583,7 +582,7 @@ static int start_server(const char *configuration, int override_port) {
     struct stat config_stat;
     if (lstat(config_path, &config_stat) == 0) {
         if (startup_private_file(config_path, S_IFREG, 0600)) return 255;
-    } else if (errno != ENOENT) return startup_failure("stat configuration", NULL, errno);
+    } else if (errno != ENOENT || configuration) return startup_failure("stat configuration", NULL, errno);
     snprintf(host_key_path, sizeof(host_key_path), "%s/ssh_host_ed25519_key", directory);
     ssh_key key = NULL;
     if (access(host_key_path, F_OK)) {
@@ -636,7 +635,9 @@ static int start_server(const char *configuration, int override_port) {
     if (config) {
         char line[1024];
         int bad = 0;
+        unsigned line_number = 0;
         while (fgets(line, sizeof(line), config)) {
+            line_number++;
             if (!strchr(line, '\n') && !feof(config)) { bad = 1; break; }
             char *save, *name = strtok_r(line, " \t\r\n", &save);
             if (!name || *name == '#') continue;
@@ -659,9 +660,11 @@ static int start_server(const char *configuration, int override_port) {
         fclose(config);
         if (bad) {
             ssh_key_free(key); ssh_bind_free(listener); listener = NULL;
-            return startup_failure("configuration: expected Port or numeric ListenAddress", NULL, EINVAL);
+            char stage[160];
+            snprintf(stage, sizeof(stage), "parse configuration at line %u (expected Port or numeric ListenAddress)", line_number);
+            return startup_failure(stage, NULL, EINVAL);
         }
-    } else if (errno != ENOENT) {
+    } else if (errno != ENOENT || configuration) {
         int error = errno;
         ssh_key_free(key); ssh_bind_free(listener); listener = NULL;
         return startup_failure("open configuration", NULL, error);
@@ -725,8 +728,8 @@ int ashell_sshd_main(int argc, char **argv) {
             if (atomic_load(&running)) {
                 fprintf(thread_stdout, "sshd: on port %d\n", listen_port);
                 if (!strcmp(command, "status")) {
-                    void (*addresses)(int, const char *) = dlsym(RTLD_DEFAULT, "ashell_sshd_print_addresses");
-                    if (addresses) addresses(listen_port, account);
+                    void (*addresses)(void) = dlsym(RTLD_DEFAULT, "ashell_sshd_print_addresses");
+                    if (addresses) addresses();
                 }
             }
             else fprintf(thread_stdout, "sshd: off\n");

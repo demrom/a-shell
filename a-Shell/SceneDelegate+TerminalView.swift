@@ -950,7 +950,7 @@ extension SceneDelegate {
                             commandBeforeCursor = history[historyPosition]
                             commandAfterCursor = ""
                             synchronizeRecalledInputContext(source)
-                        delayedVoiceOver(message: commandBeforeCursor)
+                            delayedVoiceOver(message: commandBeforeCursor)
                         }
                     } else {
                         historyPosition = history.count
@@ -974,7 +974,7 @@ extension SceneDelegate {
                             commandBeforeCursor = commandHistory[commandHistoryPosition]
                             commandAfterCursor = ""
                             synchronizeRecalledInputContext(source)
-                        delayedVoiceOver(message: commandBeforeCursor)
+                            delayedVoiceOver(message: commandBeforeCursor)
                         }
                     } else {
                         commandHistoryPosition = commandHistory.count
