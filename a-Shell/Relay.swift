@@ -441,7 +441,7 @@ final class RelayServer {
     #if os(iOS)
     private var clients: [String: ServiceIndicator.Client] = [:]
     private var clientIDs: [ObjectIdentifier: String] = [:]
-    private var histories: Set<ObjectIdentifier> = []
+    private var histories: [ObjectIdentifier: String] = [:]
     var clientSnapshot: [ServiceIndicator.Client] { queue.sync { clients.values.sorted { $0.since > $1.since } } }
 
     private func track(_ connection: NWConnection, open: Bool, command: String? = nil) {
@@ -478,17 +478,20 @@ final class RelayServer {
         return String(first.prefix(256)) + (first.count > 256 || command.contains(where: { $0.isNewline }) ? "…" : "")
     }
 
+    // remoteRelayHistory keys: phase/session/address/command/subject/fingerprint/status.
+    // Observers run on relay.http; enqueue work elsewhere before touching UI or disk.
     private func beginHistory(_ connection: NWConnection, command: String) {
         guard let key = clientIDs[ObjectIdentifier(connection)], let client = clients[key] else { return }
-        histories.insert(ObjectIdentifier(connection))
-        var value: [String: Any] = ["phase": "begin", "session": String(describing: ObjectIdentifier(connection)), "address": client.address, "command": Self.commandSummary(command)]
+        let session = UUID().uuidString
+        histories[ObjectIdentifier(connection)] = session
+        var value: [String: Any] = ["phase": "begin", "session": session, "address": client.address, "command": Self.commandSummary(command)]
         value["subject"] = client.subject; value["fingerprint"] = client.fingerprint
         NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil, userInfo: value)
     }
 
     private func finishHistory(_ connection: NWConnection, status: Int?) {
-        guard histories.remove(ObjectIdentifier(connection)) != nil else { return }
-        var value: [String: Any] = ["phase": "end", "session": String(describing: ObjectIdentifier(connection))]
+        guard let session = histories.removeValue(forKey: ObjectIdentifier(connection)) else { return }
+        var value: [String: Any] = ["phase": "end", "session": session]
         value["status"] = status
         NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil, userInfo: value)
     }
@@ -520,18 +523,7 @@ final class RelayServer {
         try http.start(parameters: parameters, ready: ready)
     }
 
-    func stop(_ stopped: @escaping () -> Void) {
-        queue.async {
-            #if os(iOS)
-            for identity in self.histories {
-                NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil,
-                    userInfo: ["phase": "end", "session": String(describing: identity)])
-            }
-            self.histories.removeAll()
-            #endif
-            self.http.stop(stopped)
-        }
-    }
+    func stop(_ stopped: @escaping () -> Void) { http.stop(stopped) }
 
     private func route(_ connection: NWConnection, method: String, target: String, headers: [String: String], body: Data) {
         let expected = Array(configuration.token.utf8), given = Array((headers["x-token"] ?? "").utf8)
@@ -832,7 +824,7 @@ final class Relay: ObservableObject {
             "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
         ], stop: { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
-        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: connections, clients: clients))
+        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, clients: clients))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
