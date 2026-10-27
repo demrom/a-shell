@@ -157,11 +157,18 @@ struct RelayConfiguration: Codable {
         indicator = try values.decodeIfPresent(Bool.self, forKey: .indicator) ?? true
     }
 
+    func connectCommand(host: String, command: String = "pwd") -> String {
+        func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let clientOptions = mutualTLS ? " --cert client.pem --key client.key" : ""
+        let header = mutualTLS ? "\"X-Token: $RELAY_TOKEN\"" : quoted("X-Token: " + token)
+        let address = host.contains(":") ? "[\(host)]" : host
+        return "curl --cacert .relay-cert.pem\(clientOptions) --resolve \(quoted("relay.local:\(port):\(address)")) -H \(header) --data-binary \(quoted(command)) https://relay.local:\(port)/run"
+    }
+
     func describe(state: String, directory: URL, host: String, serverCertificate: SecCertificate?, clientCA: SecCertificate?, clientCALoaded: Bool) -> String {
         func fingerprint(_ certificate: SecCertificate) -> String {
             SHA256.hash(data: SecCertificateCopyData(certificate) as Data).map { String(format: "%02X", $0) }.joined(separator: ":")
         }
-        func quoted(_ value: String) -> String { "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'" }
         var lines = [
             "state: \(state)",
             "autostart: \(enabled ? "on" : "off")",
@@ -177,8 +184,6 @@ struct RelayConfiguration: Codable {
             "server certificate SHA-256: \(serverCertificate.map(fingerprint) ?? "not created; enroll a client CA and run relay on")",
             "Mac setup: copy .relay-cert.pem from the path above over a trusted channel"
         ]
-        var clientOptions = ""
-        let header: String
         if mutualTLS {
             lines.append("client CA: \(directory.appendingPathComponent(".relay-client-ca.der").path)")
             lines.append("client CA loaded: \(clientCALoaded ? "yes" : "no")")
@@ -188,19 +193,15 @@ struct RelayConfiguration: Codable {
             }
             lines.append("Mac client: use client.pem and client.key signed by the enrolled client CA")
             lines.append("Mac token: run relay tokens in a-Shell, then set RELAY_TOKEN on the Mac")
-            header = "\"X-Token: $RELAY_TOKEN\""
-            clientOptions = " --cert client.pem --key client.key"
         } else {
             lines.append("token: \(token)")
             lines.append("warning: anyone reaching this port with this token can run commands")
-            header = quoted("X-Token: " + token)
         }
         if bind == "127.0.0.1" || bind == "::1" {
             lines.append("Mac access: change bind to 0.0.0.0 or :: in the config and run relay on")
         }
         let effectiveHost = bind == "0.0.0.0" || bind == "::" ? host : bind
-        let address = effectiveHost.contains(":") ? "[\(effectiveHost)]" : effectiveHost
-        lines.append("Mac curl: curl --cacert .relay-cert.pem\(clientOptions) --resolve \(quoted("relay.local:\(port):\(address)")) -H \(header) --data-binary 'pwd' https://relay.local:\(port)/run")
+        lines.append("Mac curl: " + connectCommand(host: effectiveHost))
         return lines.joined(separator: "\n") + "\n"
     }
 
@@ -261,6 +262,7 @@ final class LocalHTTPServer {
     let queue: DispatchQueue
     var request: ((NWConnection, String, String, [String: String], Data) -> Void)?
     var stateChanged: ((Int?) -> Void)?
+    var connectionChanged: ((NWConnection, Bool) -> Void)?
     private let requiresContentLength: Bool
     private let connectionLimit: Int
     private var listener: NWListener?
@@ -268,6 +270,7 @@ final class LocalHTTPServer {
     private var receiving: Set<UUID> = []
     private var activeConnections: Set<UUID> = []
     var port: UInt16? { queue.sync { listener?.port?.rawValue } }
+    var activeCount: Int { activeConnections.count }
     var isRunning: Bool {
         guard let listener else { return false }
         switch listener.state {
@@ -310,16 +313,18 @@ final class LocalHTTPServer {
             let id = UUID()
             self.connections[id] = connection
             self.receiving.insert(id)
-            connection.stateUpdateHandler = { [weak self] state in
-                guard let self else { return }
+            connection.stateUpdateHandler = { [weak self, weak connection] state in
+                guard let self, let connection else { return }
                 switch state {
                 case .ready:
                     self.activeConnections.insert(id)
+                    self.connectionChanged?(connection, true)
                     if self.listener != nil { self.stateChanged?(self.activeConnections.count) }
                 case .failed, .cancelled:
                     self.connections.removeValue(forKey: id)
                     self.receiving.remove(id)
                     self.activeConnections.remove(id)
+                    self.connectionChanged?(connection, false)
                     if self.listener != nil { self.stateChanged?(self.activeConnections.count) }
                 default: break
                 }
@@ -432,6 +437,58 @@ final class RelayServer {
     private var queuedConnections: [NWConnection] = []
     var port: UInt16? { http.port }
 
+    #if os(iOS)
+    private var clients: [String: ServiceIndicator.Client] = [:]
+    private var clientIDs: [ObjectIdentifier: String] = [:]
+    private var histories: Set<ObjectIdentifier> = []
+    var clientSnapshot: [ServiceIndicator.Client] { queue.sync { Array(clients.values) } }
+
+    private func track(_ connection: NWConnection, open: Bool, command: String? = nil) {
+        let identity = ObjectIdentifier(connection)
+        if !open {
+            if let key = clientIDs.removeValue(forKey: identity), !clientIDs.values.contains(key) { clients[key]?.open = false }
+            finishHistory(connection, status: nil)
+            return
+        }
+        let address: String
+        if case .hostPort(let host, _) = connection.endpoint { address = "\(host)" }
+        else { address = "\(connection.endpoint)" }
+        var subject: String?
+        var fingerprint: String?
+        if configuration.mutualTLS, let metadata = connection.metadata(definition: NWProtocolTLS.definition) as? NWProtocolTLS.Metadata {
+            var first = true
+            sec_protocol_metadata_access_peer_certificate_chain(metadata.securityProtocolMetadata) { certificate in
+                guard first else { return }; first = false
+                let leaf = sec_certificate_copy_ref(certificate).takeRetainedValue()
+                subject = SecCertificateCopySubjectSummary(leaf) as String?
+                fingerprint = SHA256.hash(data: SecCertificateCopyData(leaf) as Data).map { String(format: "%02X", $0) }.joined(separator: ":")
+            }
+        }
+        let key = "relay-\(address)-\(fingerprint ?? "token")"
+        clientIDs[identity] = key
+        var client = clients[key] ?? ServiceIndicator.Client(id: key, address: address, subject: subject, fingerprint: fingerprint, since: Date(), open: true)
+        client.open = true
+        if let command { client.command = command; client.since = Date() }
+        clients[key] = client
+        if clients.count > 8, let oldest = clients.values.filter({ !$0.open }).min(by: { $0.since < $1.since }) { clients.removeValue(forKey: oldest.id) }
+    }
+
+    private func beginHistory(_ connection: NWConnection, command: String) {
+        guard let key = clientIDs[ObjectIdentifier(connection)], let client = clients[key] else { return }
+        histories.insert(ObjectIdentifier(connection))
+        var value: [String: Any] = ["phase": "begin", "session": String(describing: ObjectIdentifier(connection)), "address": client.address, "command": command]
+        value["subject"] = client.subject; value["fingerprint"] = client.fingerprint
+        NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil, userInfo: value)
+    }
+
+    private func finishHistory(_ connection: NWConnection, status: Int?) {
+        guard histories.remove(ObjectIdentifier(connection)) != nil else { return }
+        var value: [String: Any] = ["phase": "end", "session": String(describing: ObjectIdentifier(connection))]
+        value["status"] = status
+        NotificationCenter.default.post(name: .init("remoteRelayHistory"), object: nil, userInfo: value)
+    }
+    #endif
+
     init(configuration: RelayConfiguration, directory: URL, execute: @escaping (String, String, @escaping () -> Void) -> Result, stateChanged: @escaping (Int?) -> Void) throws {
         self.configuration = configuration
         self.directory = directory
@@ -445,6 +502,9 @@ final class RelayServer {
             self?.route(connection, method: method, target: target, headers: headers, body: body)
         }
         http.stateChanged = stateChanged
+        #if os(iOS)
+        http.connectionChanged = { [weak self] connection, open in self?.track(connection, open: open) }
+        #endif
     }
 
     func start(ready: @escaping (Swift.Result<UInt16, Error>) -> Void) throws {
@@ -492,6 +552,10 @@ final class RelayServer {
         }
         Self.executionLock.unlock()
         guard pending < 8 else { send(connection, status: 503, text: "command queue full\n"); return }
+        #if os(iOS)
+        track(connection, open: true, command: command)
+        stateChanged(http.activeCount)
+        #endif
         pending += 1
         queuedConnections.append(connection)
         Self.commands.async {
@@ -501,6 +565,9 @@ final class RelayServer {
                 self.queuedConnections.removeAll { $0 === connection }
                 let active = self.http.isRunning && self.http.contains(connection)
                 if !active { self.pending -= 1 }
+                #if os(iOS)
+                if active { self.beginHistory(connection, command: command) }
+                #endif
                 return active
             }
             guard active else { return }
@@ -525,6 +592,9 @@ final class RelayServer {
                 Self.cancellationWaiters.removeAll()
                 Self.executionLock.unlock()
                 waiters.forEach { $0() }
+                #if os(iOS)
+                self.finishHistory(connection, status: result.status)
+                #endif
                 guard !result.outputExceeded else { return }
                 guard let body = try? JSONEncoder().encode(result) else { self.send(connection, status: 500, text: "could not encode result\n"); return }
                 self.send(connection, status: 200, body: body, contentType: "application/json")
@@ -556,6 +626,17 @@ final class Relay: ObservableObject {
     private var server: RelayServer?
     private var state = "stopped"
     private let directory = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+
+    func connectCommand(host: String, command: String = "pwd") -> String {
+        queue.sync {
+            guard var configuration = try? RelayConfiguration.load(from: directory) else { return "" }
+            if let server {
+                configuration = server.configuration
+                if let port = server.port { configuration.port = port }
+            }
+            return configuration.connectCommand(host: host, command: command)
+        }
+    }
 
     func restore() {
         queue.async {
@@ -688,8 +769,13 @@ final class Relay: ObservableObject {
     private func updateIndicator(_ connections: Int?) {
         let endpoint = server.map { "\($0.configuration.bind):\($0.port ?? $0.configuration.port)" }
         let mutualTLS = server?.configuration.mutualTLS ?? true
+        let port = Int(server?.port ?? server?.configuration.port ?? LocalServerPorts.relay)
+        let bind = server?.configuration.bind
+        let clients = server?.clientSnapshot ?? []
+        var certificate: SecCertificate?
+        if let server { SecIdentityCopyCertificate(server.tls.identity, &certificate) }
+        let fingerprint = certificate.map { SHA256.hash(data: SecCertificateCopyData($0) as Data).map { String(format: "%02X", $0) }.joined(separator: ":") } ?? "unavailable"
         DispatchQueue.main.async { [self] in
-            guard self.indicatorConnections != connections else { return }
             self.indicatorReset?.cancel()
             self.indicatorReset = nil
             if let connections {
@@ -697,18 +783,18 @@ final class Relay: ObservableObject {
                 else if self.indicatorRecent {
                     let reset = DispatchWorkItem { [weak self] in
                         self?.indicatorRecent = false
-                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS)
+                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients)
                     }
                     self.indicatorReset = reset
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: reset)
                 }
             } else { self.indicatorRecent = false }
             self.indicatorConnections = connections
-            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS)
+            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients)
         }
     }
 
-    private func publishIndicator(endpoint: String?, mutualTLS: Bool) {
+    private func publishIndicator(endpoint: String?, mutualTLS: Bool, port: Int, bind: String?, fingerprint: String, clients: [ServiceIndicator.Client]) {
         guard let connections = indicatorConnections else {
             ServiceIndicators.shared.remove(id: "relay")
             return
@@ -720,7 +806,7 @@ final class Relay: ObservableObject {
             "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
         ], stop: { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
-        }))
+        }, port: port, listen: bind == "::" || bind == "0.0.0.0" ? nil : bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: connections, clients: clients))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {
@@ -828,5 +914,14 @@ public func relayMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutableP
     let (status, message) = Relay.shared.command(argument)
     fputs(message, status == 0 ? thread_stdout : thread_stderr)
     return status
+}
+#endif
+
+#if os(iOS)
+// The optional shared UI owns and frees the returned command buffer.
+@_cdecl("ashell_relay_connect_command")
+public func relayConnectCommand(_ host: UnsafePointer<CChar>?, _ route: UnsafePointer<CChar>?, _ command: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
+    guard let host, let route, String(cString: route) == "/run" else { return nil }
+    return strdup(Relay.shared.connectCommand(host: String(cString: host), command: command.map { String(cString: $0) } ?? "pwd"))
 }
 #endif

@@ -16,6 +16,22 @@ struct ServiceIndicator: Identifiable {
     let title: String
     let details: [String]
     var stop: (() -> Void)? = nil
+    var port: Int = 0
+    var listen: String? = nil
+    var fingerprint = ""
+    var mutualTLS: Bool? = nil
+    var activeClientCount = 0
+
+    struct Client {
+        let id: String
+        let address: String
+        let subject: String?
+        let fingerprint: String?
+        var since: Date
+        var open: Bool
+        var command: String? = nil
+    }
+    var clients: [Client] = []
 }
 
 final class ServiceIndicators: ObservableObject {
