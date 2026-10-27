@@ -1698,15 +1698,16 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                                 period.accessibilityLabel = "Period"
                                 period.accessibilityCustomActions = symbols.compactMap { item in
                                     guard let value = title(item), value != "." else { return nil }
-                                    return UIAccessibilityCustomAction(name: PhoneKeyboardToolbar.symbolNames[value] ?? value) { [weak self] _ in
-                                        self?.insertString(item)
-                                        return self != nil
+                                    return UIAccessibilityCustomAction(name: PhoneKeyboardToolbar.symbolNames[value] ?? value) { _ in
+                                        guard let action = item.action else { return false }
+                                        return UIApplication.shared.sendAction(action, to: item.target, from: item, for: nil)
                                     }
                                 }
                                 period.menu = UIMenu(children: symbols.compactMap { item in
                                     guard let value = title(item), value != "." else { return nil }
-                                    return UIAction(title: PhoneKeyboardToolbar.symbolNames[value] ?? value) { [weak self] _ in
-                                        self?.insertString(item)
+                                    return UIAction(title: PhoneKeyboardToolbar.symbolNames[value] ?? value) { _ in
+                                        guard let action = item.action else { return }
+                                        UIApplication.shared.sendAction(action, to: item.target, from: item, for: nil)
                                     }
                                 })
                                 button = period
