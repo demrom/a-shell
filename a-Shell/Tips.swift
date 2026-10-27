@@ -37,3 +37,23 @@ struct toolbarTip: Tip {
 
     var options: [TipOption] = [MaxDisplayCount(1)]
 }
+
+@available(iOS 17.0, *)
+struct ArrowToolbarTip: Tip {
+    var title: Text { Text("Arrows") }
+    var message: Text { Text("Swipe to move · keep holding to repeat") }
+    var options: [TipOption] = [MaxDisplayCount(1)]
+}
+
+@available(iOS 17.0, *)
+struct SymbolToolbarTip: Tip {
+    var title: Text { Text("More symbols") }
+    var message: Text { Text("Slide from . for more symbols. Hold to keep them open.") }
+    var options: [TipOption] = [MaxDisplayCount(1)]
+}
+
+@available(iOS 17.0, *)
+struct SymbolPinnedTip: Tip {
+    var title: Text { Text("Tap . to close") }
+    var options: [TipOption] = [MaxDisplayCount(1)]
+}

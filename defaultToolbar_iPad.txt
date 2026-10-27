@@ -7,7 +7,7 @@
 # The effect of the parameter depends on the action:
 # - for insertString, it can be any string, and will be inserted when you type the button. 
 #					  Strings can contain \n, so you can execute commands, even multiple commands.
-# - for systemAction, it can be any of: control, selectAll, cut, copy, paste or showBrowser, plus
+# - for systemAction, it can be any of: control, selectAll, cut, copy, paste, showBrowser or remoteAccess, plus
 #	the arrow commands: up, down, left, right, or the combined arrows: up.down, left.right and 
 #	up.down.left.right
 # - for insertCommand, it is a short command that will be executed when the button is pressed. 
@@ -24,7 +24,7 @@
 
 # This file corresponds to the default toolbar: first the 4 buttons on the left (tab, control, escape, paste), 
 # then a line with "separator" to indicate the separation between the two groups, 
-# then showBrowser and the arrows on the right (combined arrows on iPhones, 4 arrow buttons on iPads).
+# then remote access, showBrowser and the arrows on the right (combined arrows on iPhones, 4 arrow buttons on iPads).
 # To customize the toolbar, simply edit this file. To go back to the default toolbar, remove it.
 #
 # showBrowser remains hidden until you activate the internalbrowser
@@ -36,6 +36,9 @@ escape						insertString		\u{001B}
 doc.on.clipboard			systemAction		paste
 
 separator
+
+# Remote access (SSH and relay): status and connection details
+antenna.radiowaves.left.and.right	systemAction		remoteAccess
 
 # This button only appears once the internalbrowser has started
 network						systemAction		showBrowser
