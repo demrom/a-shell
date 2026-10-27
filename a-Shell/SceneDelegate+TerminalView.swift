@@ -655,6 +655,19 @@ extension SceneDelegate {
         NSLog("hostCurrentDirectoryUpdate: \(directory)")
     }
     
+    private func synchronizeRecalledInputContext(_ source: SwiftTerm.TerminalView) {
+        guard source.markedTextRange == nil,
+              let range = source.textRange(from: source.beginningOfDocument, to: source.endOfDocument) else { return }
+        // History already changed the host editor. Update UIKit without sending it again.
+        let receiver = source.terminalDelegate
+        source.terminalDelegate = nil
+        defer { source.terminalDelegate = receiver }
+        source.replace(range, withText: commandBeforeCursor + commandAfterCursor)
+        if let caret = source.position(from: source.beginningOfDocument, offset: commandBeforeCursor.utf16.count) {
+            source.selectedTextRange = source.textRange(from: caret, to: caret)
+        }
+    }
+
     func send(source: SwiftTerm.TerminalView, inputString: String) {
         var string = inputString
         // print("string: \(string)")
@@ -909,6 +922,9 @@ extension SceneDelegate {
                     }
                 }
             }
+            if !autocompleteRunning {
+                synchronizeRecalledInputContext(source)
+            }
         case "\u{000E}": // control N
             fallthrough
         case escape + "OB": // down arrow (application mode)
@@ -970,6 +986,9 @@ extension SceneDelegate {
                         delayedVoiceOver(message: " empty line ")
                     }
                 }
+            }
+            if !autocompleteRunning {
+                synchronizeRecalledInputContext(source)
             }
         case "\u{0002}": // control B
             fallthrough
