@@ -3,10 +3,13 @@
 #include <libssh/callbacks.h>
 #include <arpa/inet.h>
 #include <dlfcn.h>
+#include <dispatch/dispatch.h>
+#include <dns_sd.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <ifaddrs.h>
 #include <limits.h>
+#include <netdb.h>
+#include <net/if.h>
 #include <poll.h>
 #include <pthread.h>
 #include <stdatomic.h>
@@ -17,6 +20,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
+#include <uuid/uuid.h>
 #include "NativePane.h"
 
 extern __thread FILE *thread_stdout, *thread_stderr;
@@ -32,7 +36,8 @@ static struct {
     int (*close_stdin)(void *);
     int (*interrupt)(void *);
     void (*release)(void *);
-    void (*status)(int, int, const char *, void (*)(void));
+    void (*state)(int, int, const char *, const char *, const char *, int, int, const char *const *, const char *const *, const long long *, const int *, const char *const *, const char *const *, const char *const *, void (*)(void));
+    void (*event)(const char *, const char *, const char *, const char *, const char *, const char *, long long, const char *, int);
 } host;
 
 enum { MAX_CLIENTS = 4, BUFFER_SIZE = 16384, PORT = 2222 };
@@ -45,6 +50,11 @@ typedef struct {
     struct ssh_channel_callbacks_struct callbacks;
     int authenticated, attempts, tty, cols, rows, pane_fd, error_fd, channel_closed;
     char term[128];
+    char peer[INET6_ADDRSTRLEN + 8], user[64], command[256];
+    char key_comment[65], key_fingerprint[128], identifier[37];
+    int exit_status;
+    time_t since;
+    int kind;
     void *pane;
 } Client;
 
@@ -59,6 +69,12 @@ static Client clients[MAX_CLIENTS];
 static char home[PATH_MAX], documents[PATH_MAX], authorized[PATH_MAX], account[128];
 static char **server_environment;
 static char fingerprint[128];
+static int listen_port = PORT;
+static char listen_address[INET6_ADDRSTRLEN] = "::", config_path[PATH_MAX];
+static DNSServiceRef bonjour;
+static dispatch_queue_t bonjour_queue;
+static char bonjour_name[256];
+static int bonjour_error;
 static void stop_from_indicator(void);
 
 static void free_environment(void) {
@@ -82,12 +98,28 @@ static int capture_environment(void) {
     return 0;
 }
 
-static void initialize_library(void) { library_error = ssh_init(); }
+static void initialize_library(void) {
+    library_error = ssh_init();
+    bonjour_queue = dispatch_queue_create("sshd.bonjour", DISPATCH_QUEUE_SERIAL);
+}
 
 static void indicator_locked(void) {
     int count = 0;
-    for (int i = 0; i < MAX_CLIENTS; i++) count += clients[i].used && !clients[i].finished && atomic_load(&clients[i].active);
-    if (host.status) host.status(atomic_load(&running) ? count : -1, PORT, fingerprint, stop_from_indicator);
+    const char *peers[MAX_CLIENTS], *users[MAX_CLIENTS], *commands[MAX_CLIENTS], *key_names[MAX_CLIENTS], *key_fingerprints[MAX_CLIENTS];
+    long long since[MAX_CLIENTS];
+    int kinds[MAX_CLIENTS];
+    for (int i = 0; i < MAX_CLIENTS; i++) {
+        Client *c = &clients[i];
+        if (!c->used || c->finished || !c->authenticated) continue;
+        peers[count] = c->peer; users[count] = c->user; commands[count] = c->command;
+        key_names[count] = c->key_comment; key_fingerprints[count] = c->key_fingerprint;
+        since[count] = (long long)c->since; kinds[count] = c->kind; count++;
+    }
+    if (host.state) host.state(atomic_load(&running), listen_port, listen_address, fingerprint, *bonjour_name ? bonjour_name : NULL, bonjour_error, count, peers, users, since, kinds, commands, key_names, key_fingerprints, stop_from_indicator);
+}
+
+static void client_event(Client *c, const char *phase, const char *text) {
+    if (host.event) host.event(c->identifier, phase, c->key_comment, c->key_fingerprint, c->user, c->peer, (long long)time(NULL), text, c->exit_status);
 }
 
 static void indicator(void) {
@@ -96,13 +128,34 @@ static void indicator(void) {
     pthread_mutex_unlock(&clients_lock);
 }
 
+static void registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error, const char *name, const char *type, const char *domain, void *context) {
+    (void)ref; (void)flags; (void)type; (void)domain; (void)context;
+    pthread_mutex_lock(&clients_lock);
+    bonjour_error = error == kDNSServiceErr_PolicyDenied;
+    snprintf(bonjour_name, sizeof(bonjour_name), "%s", error || !name ? "" : name);
+    indicator_locked();
+    pthread_mutex_unlock(&clients_lock);
+}
+
+static void advertise(void) {
+    DNSServiceErrorType error = DNSServiceRegister(&bonjour, 0, 0, NULL, "_ssh._tcp", NULL, NULL, htons(listen_port), 0, NULL, registered, NULL);
+    if (!error) error = DNSServiceSetDispatchQueue(bonjour, bonjour_queue);
+    if (error) {
+        if (bonjour) { DNSServiceRefDeallocate(bonjour); bonjour = NULL; }
+        pthread_mutex_lock(&clients_lock);
+        bonjour_error = error == kDNSServiceErr_PolicyDenied;
+        indicator_locked();
+        pthread_mutex_unlock(&clients_lock);
+    }
+}
+
 static int private_file(const char *path, mode_t type, mode_t mask) {
     struct stat st;
     return lstat(path, &st) == 0 && (st.st_mode & S_IFMT) == type &&
         st.st_uid == getuid() && !(st.st_mode & mask);
 }
 
-static int allowed_key(ssh_key offered) {
+static int allowed_key(ssh_key offered, char *comment, size_t size) {
     // Options and certificates need their own enforcement; reject them rather than ignore them.
     char directory[PATH_MAX];
     snprintf(directory, sizeof(directory), "%s/.ssh", documents);
@@ -129,7 +182,18 @@ static int allowed_key(ssh_key offered) {
         if (data && ssh_pki_import_pubkey_base64(data, kind, &key) == SSH_OK) {
             found = ssh_key_cmp(key, offered, SSH_KEY_CMP_PUBLIC) == 0;
             ssh_key_free(key);
-            if (found) break;
+            if (found) {
+                char *rest = strtok_r(NULL, "\r\n", &save);
+                size_t length = 0;
+                if (rest) {
+                    while (*rest == ' ' || *rest == '\t') rest++;
+                    for (; *rest && length + 1 < size; rest++)
+                        if ((unsigned char)*rest >= 32 && (unsigned char)*rest != 127) comment[length++] = *rest;
+                }
+                while (length && comment[length - 1] == ' ') length--;
+                comment[length] = 0;
+                break;
+            }
         }
     }
     fclose(file);
@@ -140,8 +204,29 @@ static int authenticate(ssh_session session, const char *user, ssh_key key, char
     (void)session;
     Client *c = data;
     c->attempts++;
-    if (strcmp(user, account) || (state != SSH_PUBLICKEY_STATE_NONE && state != SSH_PUBLICKEY_STATE_VALID) || !allowed_key(key)) return SSH_AUTH_DENIED;
-    if (state == SSH_PUBLICKEY_STATE_VALID) c->authenticated = 1;
+    char comment[65] = {0};
+    if (strcmp(user, account) || (state != SSH_PUBLICKEY_STATE_NONE && state != SSH_PUBLICKEY_STATE_VALID) || !allowed_key(key, comment, sizeof(comment))) return SSH_AUTH_DENIED;
+    if (state == SSH_PUBLICKEY_STATE_VALID) {
+        unsigned char *hash = NULL;
+        size_t length = 0;
+        char *formatted = NULL;
+        if (ssh_get_publickey_hash(key, SSH_PUBLICKEY_HASH_SHA256, &hash, &length) == SSH_OK)
+            formatted = ssh_get_fingerprint_hash(SSH_PUBLICKEY_HASH_SHA256, hash, length);
+        ssh_clean_pubkey_hash(&hash);
+        if (!formatted || strlen(formatted) >= sizeof(c->key_fingerprint)) {
+            ssh_string_free_char(formatted);
+            return SSH_AUTH_DENIED;
+        }
+        pthread_mutex_lock(&clients_lock);
+        c->authenticated = 1;
+        snprintf(c->user, sizeof(c->user), "%s", user);
+        snprintf(c->key_comment, sizeof(c->key_comment), "%s", comment);
+        snprintf(c->key_fingerprint, sizeof(c->key_fingerprint), "%s", formatted);
+        ssh_string_free_char(formatted);
+        client_event(c, "auth", "");
+        indicator_locked();
+        pthread_mutex_unlock(&clients_lock);
+    }
     return SSH_AUTH_SUCCESS;
 }
 
@@ -204,12 +289,26 @@ static int start_pane(Client *c, const char *command) {
 
 static int shell_request(ssh_session s, ssh_channel ch, void *data) {
     (void)s; (void)ch;
+    pthread_mutex_lock(&clients_lock);
+    Client *c = data;
+    if (c->kind) { pthread_mutex_unlock(&clients_lock); return 1; }
+    c->kind = 1;
+    pthread_mutex_unlock(&clients_lock);
+    client_event(c, "shell", "");
     return start_pane(data, "dash -i");
 }
 
 static int exec_request(ssh_session s, ssh_channel ch, const char *command, void *data) {
     (void)s; (void)ch;
     if (strlen(command) > 65536) return 1;
+    Client *c = data;
+    pthread_mutex_lock(&clients_lock);
+    if (c->kind) { pthread_mutex_unlock(&clients_lock); return 1; }
+    c->kind = 2;
+    snprintf(c->command, sizeof(c->command), "%s", command);
+    for (char *p = c->command; *p; p++) if ((unsigned char)*p < 32 || *p == 127) *p = ' ';
+    pthread_mutex_unlock(&clients_lock);
+    client_event(c, "exec", c->command);
     char *quoted = malloc(strlen(command) * 4 + 12);
     if (!quoted) return 1;
     char *p = stpcpy(quoted, "dash -c '");
@@ -320,6 +419,7 @@ static void *serve_client(void *data) {
                 transport_error = 0;
                 continue;
             }
+            c->exit_status = status;
             ssh_channel_request_send_exit_status(c->channel, status);
             ssh_channel_send_eof(c->channel);
             ssh_channel_close(c->channel);
@@ -340,6 +440,7 @@ static void *serve_client(void *data) {
         }
     }
 done:
+    client_event(c, "end", "");
     if (c->pane) host.release(c->pane);
     if (c->pane_fd >= 0) close(c->pane_fd);
     if (c->error_fd >= 0) close(c->error_fd);
@@ -362,7 +463,9 @@ static void *accept_clients(void *unused) {
     while (atomic_load(&running)) {
         struct pollfd p = {.fd = socket, .events = POLLIN};
         if (poll(&p, 1, 100) <= 0 || !(p.revents & POLLIN)) continue;
-        int fd = accept(socket, NULL, NULL);
+        struct sockaddr_storage address;
+        socklen_t length = sizeof(address);
+        int fd = accept(socket, (struct sockaddr *)&address, &length);
         if (fd < 0) continue;
         int one = 1;
         setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof(one));
@@ -373,7 +476,15 @@ static void *accept_clients(void *unused) {
             if (!clients[i].used && !c) c = &clients[i];
         }
         if (!c) { close(fd); pthread_mutex_unlock(&clients_lock); continue; }
-        *c = (Client){.fd = fd, .pane_fd = -1, .error_fd = -1, .cols = 80, .rows = 24};
+        *c = (Client){.fd = fd, .pane_fd = -1, .error_fd = -1, .cols = 80, .rows = 24, .exit_status = -1};
+        uuid_t identifier;
+        uuid_generate_random(identifier);
+        uuid_unparse_lower(identifier, c->identifier);
+        char peer[INET6_ADDRSTRLEN], port[6];
+        if (!getnameinfo((struct sockaddr *)&address, length, peer, sizeof(peer), port, sizeof(port), NI_NUMERICHOST | NI_NUMERICSERV))
+            snprintf(c->peer, sizeof(c->peer), address.ss_family == AF_INET6 ? "[%s]:%s" : "%s:%s", peer, port);
+        c->since = time(NULL);
+        client_event(c, "connect", "");
         strcpy(c->term, "xterm-256color");
         c->session = ssh_new();
         long timeout = 5;
@@ -391,6 +502,7 @@ static void *accept_clients(void *unused) {
 
 static void stop_server(void) {
     if (!atomic_exchange(&running, 0)) return;
+    if (bonjour) dispatch_sync(bonjour_queue, ^{ DNSServiceRefDeallocate(bonjour); bonjour = NULL; });
     pthread_join(listener_thread, NULL);
     ssh_bind_free(listener); listener = NULL;
     pthread_mutex_lock(&clients_lock);
@@ -398,6 +510,8 @@ static void stop_server(void) {
     pthread_mutex_unlock(&clients_lock);
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].used) { pthread_join(clients[i].thread, NULL); clients[i].used = 0; }
     free_environment();
+    bonjour_name[0] = 0;
+    bonjour_error = 0;
     indicator();
 }
 
@@ -407,104 +521,207 @@ static void stop_from_indicator(void) {
     pthread_mutex_unlock(&control);
 }
 
-static int start_server(void) {
+static int startup_failure(const char *stage, void *object, int error) {
+    const char *detail = object ? ssh_get_error(object) : NULL;
+    char message[1024];
+    snprintf(message, sizeof(message), "sshd: %s failed%s%s (errno %d: %s)", stage,
+            detail && *detail ? ": " : "", detail && *detail ? detail : "",
+            error, error ? strerror(error) : "not set");
+    fprintf(thread_stderr, "%s\n", message);
+    void (*report)(const char *) = dlsym(RTLD_DEFAULT, "ashell_sshd_error");
+    if (report) report(message);
+    return 255;
+}
+
+static int startup_private_file(const char *path, mode_t type, mode_t mode) {
+    struct stat st;
+    if (lstat(path, &st)) return startup_failure(path, NULL, errno);
+    if ((st.st_mode & S_IFMT) != type || st.st_uid != getuid())
+        return startup_failure("check SSH file type and owner", NULL, EACCES);
+    if ((st.st_mode & 0777) == mode) return 0;
+    const char *display = path;
+    char relative[PATH_MAX];
+    if (!strncmp(path, home, strlen(home)) && path[strlen(home)] == '/') {
+        snprintf(relative, sizeof(relative), "~%s", path + strlen(home));
+        display = relative;
+    }
+    // Quote arbitrary user config paths without allowing shell substitution.
+    char quoted[PATH_MAX * 4 + 4];
+    size_t n = 0;
+    const char *tail = display;
+    if (tail[0] == '~' && tail[1] == '/') { quoted[n++] = *tail++; quoted[n++] = *tail++; }
+    quoted[n++] = '\'';
+    for (; *tail && n + 5 < sizeof(quoted); tail++) {
+        if (*tail == '\'') { memcpy(quoted + n, "'\\''", 4); n += 4; }
+        else quoted[n++] = *tail;
+    }
+    quoted[n++] = '\''; quoted[n] = 0;
+    // a-Shell's command parser keeps quotes embedded after ~/ literally.
+    // Simple paths need no quoting in either a-Shell or a POSIX shell.
+    const char *plain = display;
+    if (plain[0] == '~' && plain[1] == '/') plain += 2;
+    if (strspn(plain, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_./-") == strlen(plain))
+        snprintf(quoted, sizeof(quoted), "%s", display);
+    char message[PATH_MAX * 5 + 256];
+    snprintf(message, sizeof(message), "sshd: %s has mode %03o; expected %03o. Run: chmod %03o %s",
+        display, (unsigned)(st.st_mode & 0777), (unsigned)mode, (unsigned)mode, quoted);
+    fprintf(thread_stderr, "%s\n", message);
+    void (*report)(const char *) = dlsym(RTLD_DEFAULT, "ashell_sshd_error");
+    if (report) report(message);
+    return 255;
+}
+
+static int start_server(const char *configuration, int override_port) {
     pthread_once(&library_once, initialize_library);
-    if (library_error != SSH_OK) return EIO;
+    if (library_error != SSH_OK) return startup_failure("initialize libssh", NULL, 0);
 #define LOAD(field, suffix) do { \
     *(void **)(&host.field) = dlsym(RTLD_DEFAULT, "ashell_pane_" suffix); \
-    if (!host.field) return ENOTSUP; \
+    if (!host.field) return startup_failure("load pane " suffix, NULL, ENOTSUP); \
 } while (0)
     LOAD(spawn, "spawn_ex"); LOAD(poll, "poll");
     LOAD(resize, "resize"); LOAD(close_stdin, "close_stdin");
     LOAD(interrupt, "interrupt"); LOAD(release, "release");
-    *(void **)(&host.status) = dlsym(RTLD_DEFAULT, "ashell_sshd_status");
+    *(void **)(&host.state) = dlsym(RTLD_DEFAULT, "ashell_sshd_state_v2");
+    *(void **)(&host.event) = dlsym(RTLD_DEFAULT, "ashell_sshd_event");
 #undef LOAD
     const char *value = ios_getenv("HOME");
-    if (!value || strlen(value) + 48 >= sizeof(home)) return EINVAL;
+    if (!value || strlen(value) + 48 >= sizeof(home)) return startup_failure("read HOME", NULL, EINVAL);
     strcpy(home, value);
     snprintf(documents, sizeof(documents), "%s/Documents", home);
     snprintf(authorized, sizeof(authorized), "%s/.ssh/authorized_keys", documents);
+    if (configuration && strlen(configuration) >= sizeof(config_path)) return EINVAL;
+    if (configuration) strcpy(config_path, configuration);
+    else snprintf(config_path, sizeof(config_path), "%s/.ssh/sshd_config", documents);
     value = ios_getenv("USER");
     if (!value || !*value) value = "mobile";
     if (strlen(value) >= sizeof(account)) return EINVAL;
     strcpy(account, value);
     char directory[PATH_MAX], host_key_path[PATH_MAX];
     snprintf(directory, sizeof(directory), "%s/.ssh", documents);
-    if (mkdir(directory, 0700) && errno != EEXIST) return errno;
-    if (!private_file(directory, S_IFDIR, 0077) || !private_file(authorized, S_IFREG, 0077)) return EACCES;
+    int created_directory = mkdir(directory, 0700);
+    if (created_directory && errno != EEXIST) return startup_failure("create .ssh directory", NULL, errno);
+    if (!created_directory && chmod(directory, 0700)) return startup_failure("set new .ssh directory permissions", NULL, errno);
+    if (startup_private_file(directory, S_IFDIR, 0700)) return 255;
+    int authorized_fd = open(authorized, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (authorized_fd >= 0) {
+        int error = fchmod(authorized_fd, 0600) ? errno : 0;
+        close(authorized_fd);
+        if (error) return startup_failure("set new authorized_keys permissions", NULL, error);
+    }
+    else if (errno != EEXIST) return startup_failure("create authorized_keys", NULL, errno);
+    if (startup_private_file(authorized, S_IFREG, 0600)) return 255;
+    struct stat config_stat;
+    if (lstat(config_path, &config_stat) == 0) {
+        if (startup_private_file(config_path, S_IFREG, 0600)) return 255;
+    } else if (errno != ENOENT) return startup_failure("stat configuration", NULL, errno);
     snprintf(host_key_path, sizeof(host_key_path), "%s/ssh_host_ed25519_key", directory);
     ssh_key key = NULL;
     if (access(host_key_path, F_OK)) {
-        if (errno != ENOENT || ssh_pki_generate_key(SSH_KEYTYPE_ED25519, NULL, &key) != SSH_OK) return EIO;
+        if (errno != ENOENT) return startup_failure("access host key", NULL, errno);
+        errno = 0;
+        if (ssh_pki_generate_key(SSH_KEYTYPE_ED25519, NULL, &key) != SSH_OK) return startup_failure("generate host key", NULL, errno);
         char *pem = NULL;
-        if (ssh_pki_export_privkey_base64(key, NULL, NULL, NULL, &pem) != SSH_OK) { ssh_key_free(key); return EIO; }
+        errno = 0;
+        if (ssh_pki_export_privkey_base64(key, NULL, NULL, NULL, &pem) != SSH_OK) { int error = errno; ssh_key_free(key); return startup_failure("export host key", NULL, error); }
         int fd = open(host_key_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
         size_t length = strlen(pem), written = 0;
         if (fd >= 0) while (written < length) { ssize_t n = write(fd, pem + written, length - written); if (n <= 0) break; written += n; }
         int error = fd < 0 ? errno : written != length ? EIO : 0;
-        if (fd >= 0) { if (fsync(fd) && !error) error = errno; close(fd); if (error) unlink(host_key_path); }
+        if (fd >= 0) { if (fchmod(fd, 0600) && !error) error = errno; if (fsync(fd) && !error) error = errno; close(fd); if (error) unlink(host_key_path); }
         ssh_string_free_char(pem);
-        if (error) { ssh_key_free(key); return error; }
+        if (error) { ssh_key_free(key); return startup_failure("write host key", NULL, error); }
     } else {
-        if (!private_file(host_key_path, S_IFREG, 0077) || ssh_pki_import_privkey_file(host_key_path, NULL, NULL, NULL, &key) != SSH_OK) return EACCES;
+        if (startup_private_file(host_key_path, S_IFREG, 0600)) return 255;
+        errno = 0;
+        if (ssh_pki_import_privkey_file(host_key_path, NULL, NULL, NULL, &key) != SSH_OK) return startup_failure("import host key", NULL, errno);
     }
     unsigned char *hash = NULL;
     size_t hash_length = 0;
     char *formatted = NULL;
+    errno = 0;
     if (ssh_get_publickey_hash(key, SSH_PUBLICKEY_HASH_SHA256, &hash, &hash_length) == SSH_OK)
         formatted = ssh_get_fingerprint_hash(SSH_PUBLICKEY_HASH_SHA256, hash, hash_length);
     ssh_clean_pubkey_hash(&hash);
     if (!formatted || strlen(formatted) >= sizeof(fingerprint)) {
-        ssh_string_free_char(formatted); ssh_key_free(key); return EIO;
+        int error = errno;
+        ssh_string_free_char(formatted); ssh_key_free(key); return startup_failure("fingerprint host key", NULL, error);
     }
     strcpy(fingerprint, formatted);
     ssh_string_free_char(formatted);
+    errno = 0;
     listener = ssh_bind_new();
     int port = PORT, no = 0;
-    int ok = listener && ssh_bind_options_set(listener, SSH_BIND_OPTIONS_PROCESS_CONFIG, &no) == SSH_OK &&
-        ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDADDR, "0.0.0.0") == SSH_OK &&
-        ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &port) == SSH_OK;
-    if (ok) {
-        ok = ssh_bind_options_set(listener, SSH_BIND_OPTIONS_IMPORT_KEY, key) == SSH_OK;
-        if (ok) { key = NULL; ok = ssh_bind_listen(listener) == SSH_OK; }
+#define BIND_STEP(stage, operation) do { \
+    errno = 0; \
+    if ((operation) != SSH_OK) { \
+        startup_failure(stage, listener, errno); \
+        ssh_key_free(key); if (listener) ssh_bind_free(listener); listener = NULL; return 255; \
+    } \
+} while (0)
+    if (!listener) { int error = errno; ssh_key_free(key); return startup_failure("allocate listener", NULL, error); }
+    BIND_STEP("disable system configuration", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_PROCESS_CONFIG, &no));
+    BIND_STEP("set bind address", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDADDR, "::"));
+    BIND_STEP("set default port", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &port));
+    BIND_STEP("parse configuration", ssh_bind_options_parse_config(listener, config_path));
+    if (override_port) BIND_STEP("set port", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &override_port));
+    BIND_STEP("install host key", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_IMPORT_KEY, key));
+    key = NULL;
+    BIND_STEP("listen", ssh_bind_listen(listener));
+#undef BIND_STEP
+    struct sockaddr_storage address;
+    socklen_t address_length = sizeof(address);
+    if (getsockname(ssh_bind_get_fd(listener), (struct sockaddr *)&address, &address_length) ||
+        getnameinfo((struct sockaddr *)&address, address_length, listen_address, sizeof(listen_address), NULL, 0, NI_NUMERICHOST)) {
+        int error = errno;
+        ssh_bind_free(listener); listener = NULL; return startup_failure("read listener address", NULL, error);
     }
-    ssh_key_free(key);
-    if (!ok) { if (listener) ssh_bind_free(listener); listener = NULL; return EIO; }
+    listen_port = ntohs(address.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&address)->sin6_port : ((struct sockaddr_in *)&address)->sin_port);
     int error = capture_environment();
-    if (error) { ssh_bind_free(listener); listener = NULL; return error; }
+    if (error) { ssh_bind_free(listener); listener = NULL; return startup_failure("capture environment", NULL, error); }
     atomic_store(&running, 1);
     error = pthread_create(&listener_thread, NULL, accept_clients, NULL);
-    if (error) { atomic_store(&running, 0); ssh_bind_free(listener); listener = NULL; free_environment(); return error; }
+    if (error) { atomic_store(&running, 0); ssh_bind_free(listener); listener = NULL; free_environment(); return startup_failure("start listener thread", NULL, error); }
+    advertise();
     indicator();
     return 0;
 }
 
 int ashell_sshd_main(int argc, char **argv) {
-    if (ios_getenv("ASHELL_WORKER_PID")) {
-        fprintf(thread_stderr, "sshd: control the service from the application terminal\n");
-        return 1;
-    }
     pthread_mutex_lock(&control);
-    const char *command = argc == 2 ? argv[1] : "help";
+    extern int optreset;
+    optreset = 1; optind = 1; opterr = 0;
+    const char *configuration = NULL;
+    int option, override_port = 0, invalid = 0;
+    while ((option = getopt(argc, argv, "f:p:")) != -1) {
+        if (option == 'f') configuration = optarg;
+        else if (option == 'p') {
+            char *end;
+            errno = 0;
+            long parsed = strtol(optarg, &end, 10);
+            if (errno || end == optarg || *end || parsed < 1 || parsed > 65535) invalid = 1;
+            else override_port = (int)parsed;
+        } else invalid = 1;
+    }
+    const char *command = !invalid && optind + 1 == argc ? argv[optind] : "help";
     int error = 0;
-    if (!strcmp(command, "off")) { stop_server(); fprintf(thread_stdout, "sshd: stopped\n"); }
+    int was_running = atomic_load(&running);
+    if (!strcmp(command, "off")) { stop_server(); if (was_running) fprintf(thread_stdout, "sshd: off\n"); }
     else if (!strcmp(command, "on") || !strcmp(command, "status")) {
-        if (!strcmp(command, "on") && !atomic_load(&running)) error = start_server();
-        if (error) fprintf(thread_stderr, "sshd: %s%s\n", strerror(error),
-            error == EACCES ? " (require Documents/.ssh mode 700 and authorized_keys mode 600)" : "");
-        else if (!atomic_load(&running)) fprintf(thread_stdout, "sshd: stopped (default)\n");
-        else {
-            fprintf(thread_stdout, "sshd: listening; key-only; user %s; port %d\n", account, PORT);
-            struct ifaddrs *interfaces = NULL;
-            if (!getifaddrs(&interfaces)) {
-                for (struct ifaddrs *p = interfaces; p; p = p->ifa_next) if (p->ifa_addr && p->ifa_addr->sa_family == AF_INET) {
-                    char address[INET_ADDRSTRLEN];
-                    if (inet_ntop(AF_INET, &((struct sockaddr_in *)p->ifa_addr)->sin_addr, address, sizeof(address))) fprintf(thread_stdout, "ssh -p %d %s@%s\n", PORT, account, address);
-                }
-                freeifaddrs(interfaces);
-            }
+        if (!strcmp(command, "on") && !atomic_load(&running)) error = start_server(configuration, override_port);
+        if (error) {
+            if (error != 255) fprintf(thread_stderr, "sshd: %s\n", strerror(error));
         }
-    } else { fprintf(thread_stdout, "usage: sshd on|off|status\nOff by default. Uses Documents/.ssh/authorized_keys (plain public keys only).\n"); error = 64; }
+        else if (!strcmp(command, "status") || !was_running) {
+            if (atomic_load(&running)) {
+                fprintf(thread_stdout, "sshd: on port %d\n", listen_port);
+                if (!strcmp(command, "status")) {
+                    void (*addresses)(int) = dlsym(RTLD_DEFAULT, "ashell_sshd_print_addresses");
+                    if (addresses) addresses(listen_port);
+                }
+            }
+            else fprintf(thread_stdout, "sshd: off\n");
+        }
+    } else { fprintf(thread_stdout, "usage: sshd [-f config_file] [-p port] on|off|status\nOff by default. Port from sshd_config (default 2222); -p overrides it. Changes apply at the next sshd on.\n"); error = 64; }
     pthread_mutex_unlock(&control);
-    return error ? 1 : 0;
+    return error == 255 ? 255 : error ? 1 : 0;
 }
