@@ -1690,7 +1690,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                                 symbols.accessibilityLabel = "Period"
                                 button = symbols
                                 activeButtonGroup = [symbols]
-                            } else if iconName == ".", UIDevice.current.userInterfaceIdiom == .phone, UIAccessibility.isVoiceOverRunning {
+                            } else if iconName == ".", UIDevice.current.userInterfaceIdiom == .phone {
                                 let symbols = activeButtonGroup
                                 let period = UIBarButtonItem(title: ".", style: .plain, target: self, action: #selector(insertString(_:)))
                                 period.possibleTitles = ["", "."]
@@ -1702,6 +1702,12 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                                         return self != nil
                                     }
                                 }
+                                period.menu = UIMenu(children: symbols.compactMap { item in
+                                    guard let value = title(item), value != "." else { return nil }
+                                    return UIAction(title: PhoneKeyboardToolbar.symbolNames[value] ?? value) { [weak self] _ in
+                                        self?.insertString(item)
+                                    }
+                                })
                                 button = period
                                 activeButtonGroup = [period]
                             }

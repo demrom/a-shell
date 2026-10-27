@@ -16,7 +16,9 @@
 # Groups are enclosed in brackets (see bottom of file for an example). 
 # The part after the closing bracket is the representative item (icon or text, can be nil). 
 # If space is constrained, iPadOS will display the group as a submenu using that item,
-# if it's not nil. On iPhone a group represented by "." opens a symbol panel.
+# if it's not nil. On iOS 26 iPhones with VoiceOver off, a group represented by "." opens a symbol panel.
+# Other iPhones keep a compact period key: tap for period, long-press for a symbol menu.
+# VoiceOver users can also insert symbols through the key's named actions.
 
 # On iOS 16+, groups can be made to appear depending on the command: after the opening bracket, you can
 # add a regular expression. If that expression matches the current command, the buttons will 
