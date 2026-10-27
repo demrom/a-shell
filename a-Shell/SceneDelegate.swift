@@ -1690,7 +1690,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                                 symbols.accessibilityLabel = "Period"
                                 button = symbols
                                 activeButtonGroup = [symbols]
-                            } else if iconName == "." {
+                            } else if iconName == ".", UIDevice.current.userInterfaceIdiom == .phone, UIAccessibility.isVoiceOverRunning {
                                 let symbols = activeButtonGroup
                                 let period = UIBarButtonItem(title: ".", style: .plain, target: self, action: #selector(insertString(_:)))
                                 period.possibleTitles = ["", "."]

@@ -679,13 +679,13 @@ private struct ServicePage: View {
                             }.buttonStyle(.plain).accessibilityIdentifier("relay-term-" + example.0)
                         }
                     } header: { Text("Terminal commands") } footer: {
-                        Text("Run these from the Mac. Type a command, press Return, then wait for its output. Tap an example to copy the full curl request.")
+                        Text("Run these from the client. Type a command, press Return, then wait for its output. Tap an example to copy the full curl request.")
                     }
                     }
                     if item.mutualTLS == true {
                         Section {
                             Text("Use the client.pem and client.key already enrolled for this Relay.")
-                            Text("For a new client, run these commands in an empty folder on the Mac. Tap each command to copy it.")
+                            Text("For a new client, run these commands in an empty folder on the client. Tap each command to copy it.")
                             ForEach([
                                 "umask 077; openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 -subj /CN=RelayCA -addext basicConstraints=critical,CA:TRUE -keyout ca.key -out ca.pem",
                                 "openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=RelayClient -keyout client.key -out client.csr",
@@ -697,7 +697,7 @@ private struct ServicePage: View {
                                 }.buttonStyle(.plain)
                             }
                             Text("Copy .relay-client-ca.der to this app's Documents, then run relay off and relay on. This replaces the trusted client CA; clients signed by the previous CA will no longer connect.")
-                            Text("Copy .relay-cert.pem from this app's Documents to the client over USB or another trusted channel. Keep client.key on the Mac.")
+                            Text("Copy .relay-cert.pem from this app's Documents to the client over USB or another trusted channel. Keep client.key on the client.")
                         } header: { Text("Certificates") }
                     }
                 }
