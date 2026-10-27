@@ -358,6 +358,7 @@ final class PhoneKeyboardToolbar: UIInputView {
             key.accessibilityValue = item.accessibilityValue
             if let actions = item.accessibilityCustomActions { key.accessibilityCustomActions = actions }
             if let button = key as? UIButton {
+                button.menu = item.menu
                 let image = item.image
                 let title = item.title
                 var configuration = UIButton.Configuration.plain()
