@@ -4,7 +4,6 @@
 #include <arpa/inet.h>
 #include <dlfcn.h>
 #include <dispatch/dispatch.h>
-#include <dns_sd.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -70,11 +69,7 @@ static char home[PATH_MAX], documents[PATH_MAX], authorized[PATH_MAX], account[1
 static char **server_environment;
 static char fingerprint[128];
 static int listen_port = PORT;
-static char listen_address[INET6_ADDRSTRLEN] = "::", config_path[PATH_MAX];
-static DNSServiceRef bonjour;
-static dispatch_queue_t bonjour_queue;
-static char bonjour_name[256];
-static int bonjour_error;
+static char listen_address[INET6_ADDRSTRLEN] = "0.0.0.0", config_path[PATH_MAX];
 static void stop_from_indicator(void);
 
 static void free_environment(void) {
@@ -100,7 +95,6 @@ static int capture_environment(void) {
 
 static void initialize_library(void) {
     library_error = ssh_init();
-    bonjour_queue = dispatch_queue_create("sshd.bonjour", DISPATCH_QUEUE_SERIAL);
 }
 
 static void indicator_locked(void) {
@@ -115,7 +109,7 @@ static void indicator_locked(void) {
         key_names[count] = c->key_comment; key_fingerprints[count] = c->key_fingerprint;
         since[count] = (long long)c->since; kinds[count] = c->kind; count++;
     }
-    if (host.state) host.state(atomic_load(&running), listen_port, listen_address, fingerprint, *bonjour_name ? bonjour_name : NULL, bonjour_error, count, peers, users, since, kinds, commands, key_names, key_fingerprints, stop_from_indicator);
+    if (host.state) host.state(atomic_load(&running), listen_port, listen_address, fingerprint, account, 0, count, peers, users, since, kinds, commands, key_names, key_fingerprints, stop_from_indicator);
 }
 
 static void client_event(Client *c, const char *phase, const char *text) {
@@ -126,27 +120,6 @@ static void indicator(void) {
     pthread_mutex_lock(&clients_lock);
     indicator_locked();
     pthread_mutex_unlock(&clients_lock);
-}
-
-static void registered(DNSServiceRef ref, DNSServiceFlags flags, DNSServiceErrorType error, const char *name, const char *type, const char *domain, void *context) {
-    (void)ref; (void)flags; (void)type; (void)domain; (void)context;
-    pthread_mutex_lock(&clients_lock);
-    bonjour_error = error == kDNSServiceErr_PolicyDenied;
-    snprintf(bonjour_name, sizeof(bonjour_name), "%s", error || !name ? "" : name);
-    indicator_locked();
-    pthread_mutex_unlock(&clients_lock);
-}
-
-static void advertise(void) {
-    DNSServiceErrorType error = DNSServiceRegister(&bonjour, 0, 0, NULL, "_ssh._tcp", NULL, NULL, htons(listen_port), 0, NULL, registered, NULL);
-    if (!error) error = DNSServiceSetDispatchQueue(bonjour, bonjour_queue);
-    if (error) {
-        if (bonjour) { DNSServiceRefDeallocate(bonjour); bonjour = NULL; }
-        pthread_mutex_lock(&clients_lock);
-        bonjour_error = error == kDNSServiceErr_PolicyDenied;
-        indicator_locked();
-        pthread_mutex_unlock(&clients_lock);
-    }
 }
 
 static int private_file(const char *path, mode_t type, mode_t mask) {
@@ -502,7 +475,6 @@ static void *accept_clients(void *unused) {
 
 static void stop_server(void) {
     if (!atomic_exchange(&running, 0)) return;
-    if (bonjour) dispatch_sync(bonjour_queue, ^{ DNSServiceRefDeallocate(bonjour); bonjour = NULL; });
     pthread_join(listener_thread, NULL);
     ssh_bind_free(listener); listener = NULL;
     pthread_mutex_lock(&clients_lock);
@@ -510,8 +482,6 @@ static void stop_server(void) {
     pthread_mutex_unlock(&clients_lock);
     for (int i = 0; i < MAX_CLIENTS; i++) if (clients[i].used) { pthread_join(clients[i].thread, NULL); clients[i].used = 0; }
     free_environment();
-    bonjour_name[0] = 0;
-    bonjour_error = 0;
     indicator();
 }
 
@@ -538,7 +508,7 @@ static int startup_private_file(const char *path, mode_t type, mode_t mode) {
     if (lstat(path, &st)) return startup_failure(path, NULL, errno);
     if ((st.st_mode & S_IFMT) != type || st.st_uid != getuid())
         return startup_failure("check SSH file type and owner", NULL, EACCES);
-    if ((st.st_mode & 0777) == mode) return 0;
+    if (!(st.st_mode & 0077)) return 0;
     const char *display = path;
     char relative[PATH_MAX];
     if (!strncmp(path, home, strlen(home)) && path[strlen(home)] == '/') {
@@ -589,12 +559,12 @@ static int start_server(const char *configuration, int override_port) {
     strcpy(home, value);
     snprintf(documents, sizeof(documents), "%s/Documents", home);
     snprintf(authorized, sizeof(authorized), "%s/.ssh/authorized_keys", documents);
-    if (configuration && strlen(configuration) >= sizeof(config_path)) return EINVAL;
+    if (configuration && strlen(configuration) >= sizeof(config_path)) return startup_failure("configuration path too long", NULL, ENAMETOOLONG);
     if (configuration) strcpy(config_path, configuration);
     else snprintf(config_path, sizeof(config_path), "%s/.ssh/sshd_config", documents);
     value = ios_getenv("USER");
     if (!value || !*value) value = "mobile";
-    if (strlen(value) >= sizeof(account)) return EINVAL;
+    if (strlen(value) >= sizeof(account)) return startup_failure("user name too long", NULL, EINVAL);
     strcpy(account, value);
     char directory[PATH_MAX], host_key_path[PATH_MAX];
     snprintf(directory, sizeof(directory), "%s/.ssh", documents);
@@ -660,9 +630,42 @@ static int start_server(const char *configuration, int override_port) {
 } while (0)
     if (!listener) { int error = errno; ssh_key_free(key); return startup_failure("allocate listener", NULL, error); }
     BIND_STEP("disable system configuration", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_PROCESS_CONFIG, &no));
-    BIND_STEP("set bind address", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDADDR, "::"));
+    BIND_STEP("set bind address", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDADDR, "0.0.0.0"));
     BIND_STEP("set default port", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &port));
-    BIND_STEP("parse configuration", ssh_bind_options_parse_config(listener, config_path));
+    FILE *config = fopen(config_path, "r");
+    if (config) {
+        char line[1024];
+        int bad = 0;
+        while (fgets(line, sizeof(line), config)) {
+            if (!strchr(line, '\n') && !feof(config)) { bad = 1; break; }
+            char *save, *name = strtok_r(line, " \t\r\n", &save);
+            if (!name || *name == '#') continue;
+            char *value = strtok_r(NULL, " \t\r\n", &save);
+            char *extra = strtok_r(NULL, " \t\r\n", &save);
+            if (!value || (extra && *extra != '#')) { bad = 1; break; }
+            if (!strcasecmp(name, "Port")) {
+                char *end;
+                long parsed = strtol(value, &end, 10);
+                if (end == value || *end || parsed < 1 || parsed > 65535) { bad = 1; break; }
+                port = (int)parsed;
+                if (ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &port) != SSH_OK) { bad = 1; break; }
+            } else if (!strcasecmp(name, "ListenAddress")) {
+                struct in_addr v4; struct in6_addr v6;
+                if (inet_pton(AF_INET, value, &v4) != 1 && inet_pton(AF_INET6, value, &v6) != 1) { bad = 1; break; }
+                if (ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDADDR, value) != SSH_OK) { bad = 1; break; }
+            } else { bad = 1; break; }
+        }
+        if (ferror(config)) bad = 1;
+        fclose(config);
+        if (bad) {
+            ssh_key_free(key); ssh_bind_free(listener); listener = NULL;
+            return startup_failure("configuration: expected Port or numeric ListenAddress", NULL, EINVAL);
+        }
+    } else if (errno != ENOENT) {
+        int error = errno;
+        ssh_key_free(key); ssh_bind_free(listener); listener = NULL;
+        return startup_failure("open configuration", NULL, error);
+    }
     if (override_port) BIND_STEP("set port", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_BINDPORT, &override_port));
     BIND_STEP("install host key", ssh_bind_options_set(listener, SSH_BIND_OPTIONS_IMPORT_KEY, key));
     key = NULL;
@@ -670,10 +673,14 @@ static int start_server(const char *configuration, int override_port) {
 #undef BIND_STEP
     struct sockaddr_storage address;
     socklen_t address_length = sizeof(address);
-    if (getsockname(ssh_bind_get_fd(listener), (struct sockaddr *)&address, &address_length) ||
-        getnameinfo((struct sockaddr *)&address, address_length, listen_address, sizeof(listen_address), NULL, 0, NI_NUMERICHOST)) {
+    if (getsockname(ssh_bind_get_fd(listener), (struct sockaddr *)&address, &address_length)) {
         int error = errno;
         ssh_bind_free(listener); listener = NULL; return startup_failure("read listener address", NULL, error);
+    }
+    int address_error = getnameinfo((struct sockaddr *)&address, address_length, listen_address, sizeof(listen_address), NULL, 0, NI_NUMERICHOST);
+    if (address_error) {
+        ssh_bind_free(listener); listener = NULL;
+        return startup_failure(gai_strerror(address_error), NULL, address_error == EAI_SYSTEM ? errno : EINVAL);
     }
     listen_port = ntohs(address.ss_family == AF_INET6 ? ((struct sockaddr_in6 *)&address)->sin6_port : ((struct sockaddr_in *)&address)->sin_port);
     int error = capture_environment();
@@ -681,12 +688,15 @@ static int start_server(const char *configuration, int override_port) {
     atomic_store(&running, 1);
     error = pthread_create(&listener_thread, NULL, accept_clients, NULL);
     if (error) { atomic_store(&running, 0); ssh_bind_free(listener); listener = NULL; free_environment(); return startup_failure("start listener thread", NULL, error); }
-    advertise();
     indicator();
     return 0;
 }
 
 int ashell_sshd_main(int argc, char **argv) {
+    if (ios_getenv("ASHELL_WORKER_PID")) {
+        fprintf(thread_stderr, "sshd: control the service from the application terminal\n");
+        return 1;
+    }
     pthread_mutex_lock(&control);
     extern int optreset;
     optreset = 1; optind = 1; opterr = 0;
@@ -711,12 +721,12 @@ int ashell_sshd_main(int argc, char **argv) {
         if (error) {
             if (error != 255) fprintf(thread_stderr, "sshd: %s\n", strerror(error));
         }
-        else if (!strcmp(command, "status") || !was_running) {
+        else {
             if (atomic_load(&running)) {
                 fprintf(thread_stdout, "sshd: on port %d\n", listen_port);
                 if (!strcmp(command, "status")) {
-                    void (*addresses)(int) = dlsym(RTLD_DEFAULT, "ashell_sshd_print_addresses");
-                    if (addresses) addresses(listen_port);
+                    void (*addresses)(int, const char *) = dlsym(RTLD_DEFAULT, "ashell_sshd_print_addresses");
+                    if (addresses) addresses(listen_port, account);
                 }
             }
             else fprintf(thread_stdout, "sshd: off\n");
