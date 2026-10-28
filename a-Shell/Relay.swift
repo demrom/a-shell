@@ -731,7 +731,7 @@ final class Relay: ObservableObject {
         let server = try RelayServer(configuration: configuration, directory: directory, execute: Self.execute, stateChanged: { connections in
             self.queue.async {
                 guard self.indicatorGeneration == generation else { return }
-                self.updateIndicator(configuration.indicator ? connections : nil)
+                self.updateIndicator(connections)
             }
         })
         let ready = DispatchSemaphore(value: 0)
@@ -790,6 +790,7 @@ final class Relay: ObservableObject {
         let port = Int(server?.port ?? server?.configuration.port ?? LocalServerPorts.relay)
         let bind = server?.configuration.bind
         let clients = server?.clientSnapshot ?? []
+        let showsIndicator = server?.configuration.indicator ?? true
         var certificate: SecCertificate?
         if let server { SecIdentityCopyCertificate(server.tls.identity, &certificate) }
         let fingerprint = certificate.map { SHA256.hash(data: SecCertificateCopyData($0) as Data).map { String(format: "%02X", $0) }.joined(separator: ":") } ?? "unavailable"
@@ -801,18 +802,18 @@ final class Relay: ObservableObject {
                 else if self.indicatorRecent {
                     let reset = DispatchWorkItem { [weak self] in
                         self?.indicatorRecent = false
-                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients)
+                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients, showsIndicator: showsIndicator)
                     }
                     self.indicatorReset = reset
                     DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: reset)
                 }
             } else { self.indicatorRecent = false }
             self.indicatorConnections = connections
-            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients)
+            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients, showsIndicator: showsIndicator)
         }
     }
 
-    private func publishIndicator(endpoint: String?, mutualTLS: Bool, port: Int, bind: String?, fingerprint: String, clients: [ServiceIndicator.Client]) {
+    private func publishIndicator(endpoint: String?, mutualTLS: Bool, port: Int, bind: String?, fingerprint: String, clients: [ServiceIndicator.Client], showsIndicator: Bool) {
         guard let connections = indicatorConnections else {
             ServiceIndicators.shared.remove(id: "relay")
             return
@@ -824,7 +825,7 @@ final class Relay: ObservableObject {
             "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
         ], stop: { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
-        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, clients: clients))
+        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, showsIndicator: showsIndicator, clients: clients))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {

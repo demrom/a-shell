@@ -25,6 +25,7 @@ struct ServiceIndicator: Identifiable {
     var fingerprint = ""
     var mutualTLS: Bool? = nil
     var activeClientCount = 0
+    var showsIndicator = true
 
     struct Client {
         let id: String
@@ -59,9 +60,10 @@ struct ServiceStatus: Identifiable, Equatable {
     var reportedClientCount: Int? = nil
     var connectionDetails: (() -> AnyView)? = nil
     var color: SwiftUI.Color = .yellow
+    var showsIndicator = true
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount && lhs.color == rhs.color
+        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount && lhs.color == rhs.color && lhs.showsIndicator == rhs.showsIndicator
     }
 
     func sshCommand(host: String) -> String {
@@ -174,7 +176,7 @@ final class ServiceIndicators: ObservableObject {
                 activity: kind == .ssh ? (client.activity == 2 ? .command(client.command ?? "") : client.activity == 1 ? .shell : .signedIn) : client.command.map { .command($0) } ?? .signedIn,
                 certificateSubject: client.subject, since: client.since, open: client.open, keyName: client.keyName, keyFingerprint: client.keyFingerprint, certificateFingerprint: client.fingerprint)
         }
-        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails, color: item.color))
+        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails, color: item.color, showsIndicator: item.showsIndicator))
     }
 
     func set(_ item: ServiceStatus) {
@@ -516,7 +518,9 @@ private struct ServiceDetailsForm: View {
                             Text("Run shell commands over HTTPS. Needs a token and, by default, a client certificate (mTLS).")
                         }
                         if let item = services.items.first(where: { $0.kind == kind }) {
-                            Text("On the same Wi-Fi, use the Wi-Fi address.")
+                            if networks.addresses(for: item).contains(where: { $0.name == "Wi-Fi LAN" }) {
+                                Text("On the same Wi-Fi, use the Wi-Fi address.")
+                            }
                             if networks.addresses(for: item).contains(where: { $0.name == "VPN" }) {
                                 Text("The VPN address works when both devices use the same VPN and it allows connections between devices, such as Tailscale or WireGuard.")
                             }
@@ -742,7 +746,9 @@ private struct ServiceSection: View {
             }
 
         } footer: {
-            Text("On the same Wi-Fi, use the Wi-Fi address.")
+            if addresses.contains(where: { $0.name == "Wi-Fi LAN" }) {
+                Text("On the same Wi-Fi, use the Wi-Fi address.")
+            }
             if addresses.contains(where: { $0.name == "VPN" }) {
                 Text("The VPN address works when both devices use the same VPN and it allows connections between devices, such as Tailscale or WireGuard.")
             }
@@ -1318,10 +1324,10 @@ struct ContentView: View {
             $0.ignoresSafeArea(.keyboard, edges: .bottom)
         }
         .safeAreaInset(edge: .top, spacing: 0) {
-            if !services.items.isEmpty {
+            if services.items.contains(where: \.showsIndicator) {
                 HStack {
                     Spacer()
-                    ServiceIndicatorDots(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent)) {
+                    ServiceIndicatorDots(items: services.items.filter(\.showsIndicator), background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent)) {
                         restoresRemoteKeyboard = terminalview.view.isFirstResponder
                         terminalview.view.resignFirstResponder()
                         showingRemoteAccess = true
@@ -1357,7 +1363,8 @@ struct ContentView: View {
         let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
         let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? serviceAccent : .label])
         let image = UIImage(systemName: symbol)?.withConfiguration(configuration)
-        let action = UIAction(title: "Remote access", image: image) { _ in
+        let action = UIAction(title: "Remote access", image: image) { [weak scene] _ in
+            guard let scene else { return }
             let release = NSSelectorFromString("releaseToolbarControl")
             if scene.responds(to: release) { scene.perform(release) }
             restoresRemoteKeyboard = terminalview.view.isFirstResponder
