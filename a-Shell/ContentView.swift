@@ -7,11 +7,9 @@
 //
 
 import SwiftUI
-import Combine
 import SwiftTerm
 import WebKit
 import ios_system
-import Network
 import Darwin
 
 struct ServiceIndicator: Identifiable {
@@ -34,81 +32,112 @@ struct ServiceIndicator: Identifiable {
         var since: Date
         var open: Bool
         var command: String? = nil
+        var user: String? = nil
+        var keyName: String? = nil
+        var keyFingerprint: String? = nil
+        var activity = 0
     }
     var clients: [Client] = []
+    var account = "mobile"
+    var connectionDetails: (() -> AnyView)? = nil
 }
 
+final class ServiceIndicators: ObservableObject {
+    static let shared = ServiceIndicators()
+    @Published private(set) var items: [ServiceIndicator] = []
+    @Published var controlError: String?
 
-struct ServiceStatus: Identifiable, Equatable {
-    enum Kind: String, CaseIterable { case ssh, relay }
-    let kind: Kind
-    var id: String { kind.rawValue }
-    var port: Int
-    var listen: String?
-    var fingerprint: String
-    var mutualTLS: Bool?
-    var clients: [ServiceClient]
-    var stop: () -> Void
-    var account: String = "mobile"
-    var reportedClientCount: Int? = nil
-
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients
+    func set(_ item: ServiceIndicator) {
+        DispatchQueue.main.async {
+            self.items.removeAll { $0.id == item.id }
+            self.items.append(item)
+            self.items.sort { $0.id < $1.id }
+        }
     }
 
-    func sshCommand(host: String) -> String {
-        let quote: (String) -> String = { "'" + $0.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-        return "ssh -p \(port) \(quote(account + "@" + host))"
-    }
-
-    var title: String { kind == .ssh ? "SSH" : "Relay" }
-    var activeClientCount: Int {
-        reportedClientCount ?? clients.filter { kind == .ssh || $0.open || $0.since.timeIntervalSinceNow > -10 }.count
-    }
-
-}
-
-struct ServiceClient: Identifiable, Equatable {
-    enum Activity: Equatable { case signedIn, shell, command(String) }
-    let id: String
-    var address: String
-    var user: String?
-    var activity: Activity
-    var certificateSubject: String?
-    var since: Date
-    var open: Bool
-    var keyName: String? = nil
-    var keyFingerprint: String? = nil
-    var certificateFingerprint: String? = nil
-
-    var credentialID: String? {
-        if let keyFingerprint { return "ssh:" + keyFingerprint }
-        if let certificateFingerprint { return "relay:" + certificateFingerprint }
-        return keyName == nil && keyFingerprint == nil ? "relay-token" : nil
-    }
-
-    var displayName: String {
-        keyName.flatMap { $0.isEmpty ? nil : $0 } ?? keyFingerprint ?? certificateSubject ?? "Token"
+    func remove(id: String) {
+        DispatchQueue.main.async { self.items.removeAll { $0.id == id } }
     }
 }
 
-// Relay is optional: its PR supplies this bridge when linked into the app.
-private enum RemoteRelay {
-    enum ConnectionRequest: String, CaseIterable { case run = "/run" }
-    static var termAvailable: Bool { (commandsAsArray() as? [String])?.contains("term") == true }
-    static var available: Bool { dlsym(UnsafeMutableRawPointer(bitPattern: -2), "ashell_relay_connect_command") != nil }
+struct ServiceIndicatorDots: View {
+    let items: [ServiceIndicator]
+    let background: SwiftUI.Color
+    let foreground: SwiftUI.Color
+    let accent: SwiftUI.Color
+    @State private var showingDetails = false
 
-    static func connectCommand(host: String, request: ConnectionRequest = .run, command: String? = nil) -> String {
-        typealias Generate = @convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "ashell_relay_connect_command") else { return "" }
-        let generate = unsafeBitCast(symbol, to: Generate.self)
-        return host.withCString { host in
-            request.rawValue.withCString { route in
-                let result = command.map { $0.withCString { generate(host, route, $0) } } ?? generate(host, route, nil)
-                guard let result else { return "" }
-                defer { free(result) }
-                return String(cString: result)
+    var body: some View {
+        Button {
+            showingDetails = true
+        } label: {
+            HStack(spacing: 8) {
+                ForEach(items) { item in
+                    Circle()
+                        .fill(item.color)
+                        .overlay(Circle().stroke(foreground.opacity(0.7), lineWidth: 0.5))
+                        .frame(width: 8, height: 8)
+                }
             }
+            .padding(.horizontal, 12)
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Running services")
+        .accessibilityValue(items.map(\.title).joined(separator: ", "))
+        .accessibilityIdentifier("service-indicators")
+        .popover(isPresented: $showingDetails) {
+            details
+        }
+        .onChange(of: items.map(\.id)) { ids in
+            if ids.isEmpty { showingDetails = false }
+        }
+    }
+
+    @ViewBuilder private var details: some View {
+        let content = VStack(alignment: .leading, spacing: 16) {
+            ForEach(items) { item in
+                VStack(alignment: .leading, spacing: 6) {
+                    Label {
+                        Text(item.title).font(.headline)
+                    } icon: {
+                        Circle().fill(item.color).frame(width: 8, height: 8)
+                    }
+                    if let connectionDetails = item.connectionDetails {
+                        Text("Port: " + String(item.port))
+                        connectionDetails()
+                        ForEach(item.clients) { client in
+                            Text((client.user ?? item.account) + " · " + client.address).font(.footnote.monospaced())
+                            if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).textSelection(.enabled) }
+                        }
+                        ForEach(SSHConnectionAddresses.read(listen: item.listen), id: \.self) { host in
+                            Text("ssh -p \(item.port) \(item.account)@\(host)").font(.footnote.monospaced()).textSelection(.enabled)
+                        }
+                    }
+                    ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
+                        Text(line).font(.subheadline).textSelection(.enabled)
+                    }
+                    if let stop = item.stop {
+                        Button("Stop " + item.title, role: .destructive) {
+                            stop()
+                        }
+                        .foregroundColor(accent)
+                        .accessibilityIdentifier("service-stop-" + item.id)
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(idealWidth: 280, maxWidth: 320, alignment: .leading)
+        .fixedSize(horizontal: false, vertical: true)
+        .foregroundColor(foreground)
+        .background(background)
+        .tint(accent)
+        if #available(iOS 16.4, *) {
+            content.presentationCompactAdaptation(.popover).presentationBackground(background)
+        } else {
+            content
         }
     }
 }
@@ -121,812 +150,96 @@ public func sshdError(_ message: UnsafePointer<CChar>?) {
 
 @_cdecl("ashell_sshd_print_addresses")
 public func sshdPrintAddresses() {
-    let read = {
-        let services = ServiceIndicators.shared
-        guard let ssh = services.items.first(where: { $0.kind == .ssh }) else { return "" }
-        return services.networks.addresses(for: ssh).map {
-            "\($0.label): \(ssh.sshCommand(host: $0.address))\n"
-        }.joined()
+    let read = { ServiceIndicators.shared.items.first { $0.id == "ssh" } }
+    guard let item = Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read) else { return }
+    for host in SSHConnectionAddresses.read(listen: item.listen) {
+        let destination = item.account + "@" + host
+        let quoted = "'" + destination.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        fputs("ssh -p \(item.port) \(quoted)\n", thread_stdout)
     }
-    let output = Thread.isMainThread ? read() : DispatchQueue.main.sync(execute: read)
-    fputs(output, thread_stdout)
 }
 
 @_cdecl("ashell_sshd_state_v2")
 public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ account: UnsafePointer<CChar>?, _ count: Int32, _ peers: UnsafePointer<UnsafePointer<CChar>?>?, _ users: UnsafePointer<UnsafePointer<CChar>?>?, _ since: UnsafePointer<Int64>?, _ kinds: UnsafePointer<Int32>?, _ commands: UnsafePointer<UnsafePointer<CChar>?>?, _ keyNames: UnsafePointer<UnsafePointer<CChar>?>?, _ keyFingerprints: UnsafePointer<UnsafePointer<CChar>?>?, _ stop: (@convention(c) () -> Void)?) {
     guard running != 0 else { ServiceIndicators.shared.remove(id: "ssh"); return }
-    // The C arrays are borrowed only for this call. Copy before publishing asynchronously.
-    var clients: [ServiceClient] = []
+    // Copy the borrowed callback arrays before publishing to the main queue.
+    var clients: [ServiceIndicator.Client] = []
     for index in 0..<max(0, Int(count)) {
         let peer = peers?[index].map { String(cString: $0) } ?? "unknown"
-        let user = users?[index].map { String(cString: $0) }
         let accepted = since?[index] ?? 0
-        let activity: ServiceClient.Activity
-        switch kinds?[index] {
-        case 1: activity = .shell
-        case 2: activity = .command(commands?[index].map { String(cString: $0) } ?? "")
-        default: activity = .signedIn
-        }
-        clients.append(ServiceClient(id: "ssh-\(peer)-\(accepted)", address: peer, user: user, activity: activity, since: Date(timeIntervalSince1970: Double(accepted)), open: true,
-            keyName: keyNames?[index].map { String(cString: $0) }, keyFingerprint: keyFingerprints?[index].map { String(cString: $0) }))
+        clients.append(ServiceIndicator.Client(id: "ssh-\(peer)-\(accepted)", address: peer, subject: nil, fingerprint: nil, since: Date(timeIntervalSince1970: Double(accepted)), open: true,
+            command: commands?[index].map { String(cString: $0) }, user: users?[index].map { String(cString: $0) }, keyName: keyNames?[index].map { String(cString: $0) }, keyFingerprint: keyFingerprints?[index].map { String(cString: $0) }, activity: Int(kinds?[index] ?? 0)))
     }
-    let address = listen.map { String(cString: $0) }
-    let user = account.map { String(cString: $0) } ?? "mobile"
+    let key = fingerprint.map { String(cString: $0) } ?? "unavailable"
+    let item = ServiceIndicator(id: "ssh", color: clients.isEmpty ? .yellow : .green, title: "SSH", details: [], stop: { stop?() }, port: Int(port), listen: listen.map { String(cString: $0) }, fingerprint: key, activeClientCount: clients.count, clients: clients, account: account.map { String(cString: $0) } ?? "mobile", connectionDetails: { AnyView(SSHConnectionDetails(fingerprint: key)) })
     DispatchQueue.main.async {
         if ServiceIndicators.shared.controlError?.hasPrefix("sshd:") == true { ServiceIndicators.shared.controlError = nil }
     }
-    ServiceIndicators.shared.set(ServiceStatus(kind: .ssh, port: Int(port), listen: address,
-        fingerprint: fingerprint.map { String(cString: $0) } ?? "unavailable", mutualTLS: nil,
-        clients: clients, stop: { stop?() }, account: user))
+    ServiceIndicators.shared.set(item)
 }
 
 @_cdecl("ashell_sshd_event")
 public func sshdEvent(_ session: UnsafePointer<CChar>?, _ phase: UnsafePointer<CChar>?, _ name: UnsafePointer<CChar>?, _ fingerprint: UnsafePointer<CChar>?, _ user: UnsafePointer<CChar>?, _ peer: UnsafePointer<CChar>?, _ at: Int64, _ text: UnsafePointer<CChar>?, _ status: Int32) {
-    // Copy the callback's borrowed strings before the history queue owns them.
     guard let session, let phase else { return }
-    let sessionID = String(cString: session)
-    let phaseName = String(cString: phase)
-    let date = Date(timeIntervalSince1970: Double(at))
-    switch phaseName {
-    case "auth":
-        guard let fingerprint else { return }
-        let credential = String(cString: fingerprint)
-        let label = name.map { String(cString: $0) } ?? ""
-        RemoteAccessHistory.shared.connected(session: sessionID, id: "ssh:" + credential, service: "ssh", label: label.isEmpty ? credential : label, fingerprint: credential, address: peer.map { String(cString: $0) } ?? "unknown", at: date)
-    case "shell", "exec":
-        RemoteAccessHistory.shared.began(session: sessionID, kind: phaseName, text: phaseName == "exec" ? text.map { String(cString: $0) } ?? "" : "", at: date)
-    case "end":
-        RemoteAccessHistory.shared.ended(session: sessionID, status: status < 0 ? nil : Int(status), at: date)
-    default: break
+    // The Relay PR optionally consumes these events; SSH works without a listener.
+    var value: [String: Any] = ["session": String(cString: session), "phase": String(cString: phase), "at": at, "status": status]
+    for (key, pointer) in [("name", name), ("fingerprint", fingerprint), ("user", user), ("peer", peer), ("text", text)] {
+        if let pointer { value[key] = String(cString: pointer) }
     }
+    DispatchQueue.main.async { NotificationCenter.default.post(name: .init("remoteSSHHistory"), object: nil, userInfo: value) }
 }
 
-final class ServiceIndicators: ObservableObject {
-    static let shared = ServiceIndicators()
-    @Published private(set) var items: [ServiceStatus] = []
-    let networks = ServiceNetworks()
-    @Published var controlError: String?
-
-    private var relayHistory: AnyCancellable?
-
-    init() {
-        relayHistory = NotificationCenter.default.publisher(for: .init("remoteRelayHistory")).sink { note in
-            guard let value = note.userInfo, let phase = value["phase"] as? String, let session = value["session"] as? String else { return }
-            if phase == "begin", let address = value["address"] as? String {
-                let fingerprint = value["fingerprint"] as? String
-                let id = fingerprint.map { "relay:" + $0 } ?? "relay-token"
-                RemoteAccessHistory.shared.connected(session: session, id: id, service: "relay", label: value["subject"] as? String ?? "Token clients", fingerprint: fingerprint, address: address, at: Date())
-                RemoteAccessHistory.shared.began(session: session, kind: "exec", text: value["command"] as? String ?? "")
-            } else if phase == "end" {
-                RemoteAccessHistory.shared.ended(session: session, status: value["status"] as? Int)
-            }
-        }
-    }
-
-    private func publish(_ change: @escaping () -> Void) {
-        DispatchQueue.main.async {
-            let animation: Animation
-            if UIAccessibility.isReduceMotionEnabled { animation = .linear(duration: 0.15) }
-            else if #available(iOS 17, *) { animation = .smooth }
-            else { animation = .easeInOut(duration: 0.2) }
-            withAnimation(animation) { change() }
-            if self.items.isEmpty { self.networks.stop() } else { self.networks.start() }
-        }
-    }
-
-    func set(_ item: ServiceIndicator) {
-        guard item.id == "relay" else { return }
-        set(ServiceStatus(kind: .relay, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: item.clients.map { ServiceClient(id: $0.id, address: $0.address, activity: $0.command.map { .command($0) } ?? .signedIn, certificateSubject: $0.subject, since: $0.since, open: $0.open, certificateFingerprint: $0.fingerprint) }, stop: { item.stop?() }, reportedClientCount: item.activeClientCount))
-    }
-
-    func set(_ item: ServiceStatus) {
-        publish {
-            var items = self.items.filter { $0.id != item.id }
-            items.append(item)
-            items.sort { $0.kind == .ssh && $1.kind != .ssh }
-            self.items = items
-        }
-    }
-
-    func remove(id: String) { publish { self.items = self.items.filter { $0.id != id } } }
-
-}
-
-final class RemoteAccessHistory: ObservableObject {
-    struct Event: Codable, Identifiable {
-        var id: String
-        var start: Date
-        var end: Date?
-        var kind: String
-        var text: String
-        var address: String
-        var status: Int?
-    }
-
-    struct Client: Codable, Identifiable {
-        var id: String
-        var service: String
-        var label: String
-        var fingerprint: String?
-        var firstSeen: Date
-        var lastConnected: Date
-        var lastDisconnected: Date?
-        var lastAddress: String
-        var events: [Event]
-        var lastSeen: Date { max(lastConnected, lastDisconnected ?? lastConnected) }
-    }
-
-    static let shared = RemoteAccessHistory()
-    @Published private(set) var clients: [Client] = []
-    @Published private(set) var storageError: String?
-    private let queue = DispatchQueue(label: "remote-access.history", qos: .utility)
-    private var stored: [String: Client] = [:]
-    private var sessions: [String: String] = [:]
-    private var write: DispatchWorkItem?
-    private let file = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("remote-access-history.json")
-
-    private init() {
-        queue.async {
-            do {
-                if FileManager.default.fileExists(atPath: self.file.path) {
-                    let loaded = try JSONDecoder().decode([Client].self, from: Data(contentsOf: self.file))
-                    let cutoff = Date().addingTimeInterval(-30 * 24 * 60 * 60)
-                    for var client in loaded.sorted(by: { $0.lastSeen > $1.lastSeen }).prefix(32) {
-                        client.events = Array(client.events.filter { $0.start >= cutoff }.prefix(20))
-                        self.stored[client.id] = client
-                    }
-                    self.changed()
-                }
-            } catch { self.failed(error) }
-        }
-    }
-
-    private static func clean(_ value: String, limit: Int = 256) -> String {
-        String(String.UnicodeScalarView(value.unicodeScalars.filter { !CharacterSet.controlCharacters.contains($0) }).prefix(limit))
-    }
-
-    func connected(session: String, id: String, service: String, label: String, fingerprint: String?, address: String, at date: Date) {
-        queue.async {
-            var client = self.stored[id] ?? Client(id: id, service: service, label: "", fingerprint: fingerprint, firstSeen: date, lastConnected: date, lastAddress: address, events: [])
-            client.label = Self.clean(label, limit: 64)
-            client.fingerprint = fingerprint
-            client.lastConnected = date
-            client.lastAddress = address
-            self.stored[id] = client
-            self.sessions[session] = id
-            self.changed()
-        }
-    }
-
-    func began(session: String, kind: String, text: String, at date: Date = Date()) {
-        queue.async {
-            guard let id = self.sessions[session], var client = self.stored[id] else { return }
-            client.events.insert(Event(id: session, start: date, kind: kind, text: Self.clean(text), address: client.lastAddress), at: 0)
-            client.events = Array(client.events.prefix(20))
-            self.stored[id] = client
-            self.changed()
-        }
-    }
-
-    func ended(session: String, status: Int?, at date: Date = Date()) {
-        queue.async {
-            guard let id = self.sessions.removeValue(forKey: session), var client = self.stored[id] else { return }
-            client.lastDisconnected = date
-            if let index = client.events.firstIndex(where: { $0.id == session }) {
-                client.events[index].end = date
-                client.events[index].status = status
-            }
-            self.stored[id] = client
-            self.changed()
-        }
-    }
-
-    func clear(service: String) {
-        queue.async {
-            self.stored = self.stored.filter { $0.value.service != service }
-            self.changed()
-        }
-    }
-
-    private func changed() {
-        let clients = Array(stored.values.sorted { $0.lastSeen > $1.lastSeen }.prefix(32))
-        stored = Dictionary(uniqueKeysWithValues: clients.map { ($0.id, $0) })
-        DispatchQueue.main.async { self.clients = clients }
-        write?.cancel()
-        let work = DispatchWorkItem { self.persist() }
-        write = work
-        queue.asyncAfter(deadline: .now() + 1, execute: work)
-    }
-
-    private func persist() {
-        do {
-            let directory = file.deletingLastPathComponent()
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-            try JSONEncoder().encode(stored.values.sorted { $0.lastSeen > $1.lastSeen }).write(to: file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            var protectedFile = file
-            var values = URLResourceValues()
-            values.isExcludedFromBackup = true
-            try protectedFile.setResourceValues(values)
-            try FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication], ofItemAtPath: file.path)
-            DispatchQueue.main.async { self.storageError = nil }
-        } catch { failed(error) }
-    }
-
-    private func failed(_ error: Error) {
-        DispatchQueue.main.async { self.storageError = "History unavailable: " + error.localizedDescription }
-    }
-}
-
-struct ServiceAddress: Identifiable, Equatable {
-    var id: String { interface + address }
-    let interface: String
-    let address: String
-    let name: String
-    let symbol: String
-    let loopback: Bool
-
-    var label: String {
-        name + (name == "VPN" ? " (\(interface))" : "") + (address.contains(":") ? " · IPv6" : " · IPv4")
-    }
-
-    func endpoint(port: Int) -> String {
-        (address.contains(":") ? "[" + address + "]" : address) + ":" + String(port)
-    }
-}
-
-final class ServiceNetworks: ObservableObject {
-    @Published private(set) var addresses: [ServiceAddress] = []
-    private var monitor: NWPathMonitor?
-    private var generation = UUID()
-
-    func start() {
-        guard monitor == nil else { return }
-        let monitor = NWPathMonitor()
-        self.monitor = monitor
-        let generation = UUID()
-        self.generation = generation
-        monitor.pathUpdateHandler = { [weak self] path in
-            let addresses = Self.read(path)
-            DispatchQueue.main.async {
-                guard let self, self.generation == generation else { return }
-                self.addresses = addresses
-            }
-        }
-        monitor.start(queue: DispatchQueue(label: "services.networks", qos: .utility))
-    }
-
-    func stop() {
-        generation = UUID()
-        monitor?.cancel()
-        monitor = nil
-        addresses = []
-    }
-
-    func addresses(for service: ServiceStatus) -> [ServiceAddress] {
-        let candidates = addresses.filter { entry in
-            if let listen = service.listen {
-                if listen == "0.0.0.0" { return !entry.loopback && !entry.address.contains(":") }
-                if listen == "::" { return !entry.loopback }
-                return entry.address == listen
-            }
-            return !entry.loopback
-        }
-        var interfaces = Set<String>()
-        return candidates.filter { interfaces.insert($0.interface).inserted }
-    }
-
-    func bestAddress(for service: ServiceStatus) -> ServiceAddress? {
-        let candidates = addresses(for: service)
-        func rank(_ address: ServiceAddress) -> Int {
-            if address.name == "Wi-Fi LAN" { return 0 }
-            if address.name == "USB / Ethernet" { return 1 }
-            return address.loopback ? 3 : 2
-        }
-        return candidates.sorted {
-            (rank($0), $0.address.contains(":") ? 1 : 0, $0.address) < (rank($1), $1.address.contains(":") ? 1 : 0, $1.address)
-        }.first
-    }
-
-    private static func read(_ path: NWPath) -> [ServiceAddress] {
-        let types = Dictionary(path.availableInterfaces.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
-        var interfaces: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&interfaces) == 0 else { return [] }
-        defer { freeifaddrs(interfaces) }
-        var entry = interfaces
-        var result: [ServiceAddress] = []
-        while let current = entry {
-            defer { entry = current.pointee.ifa_next }
+private enum SSHConnectionAddresses {
+    static func read(listen: String?) -> [String] {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0 else { return [] }
+        defer { freeifaddrs(head) }
+        var cursor = head
+        var result: [String] = []
+        while let current = cursor {
+            defer { cursor = current.pointee.ifa_next }
             let item = current.pointee
-            guard item.ifa_flags & UInt32(IFF_UP) != 0, let address = item.ifa_addr else { continue }
-            let family = Int32(address.pointee.sa_family)
-            guard family == AF_INET || family == AF_INET6 else { continue }
-            if family == AF_INET6 {
-                let bytes = UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
-                let linkLocal = withUnsafeBytes(of: bytes) { $0[0] == 0xfe && $0[1] & 0xc0 == 0x80 }
-                let uniqueLocal = withUnsafeBytes(of: bytes) { $0[0] & 0xfe == 0xfc }
-                if linkLocal || uniqueLocal { continue }
-            }
-            let interface = String(cString: item.ifa_name)
-            let loopback = item.ifa_flags & UInt32(IFF_LOOPBACK) != 0
-            let name: String, symbol: String
-            if loopback { name = "This device only"; symbol = "iphone" }
-            else if interface.hasPrefix("utun") || interface.hasPrefix("ipsec") { name = "VPN"; symbol = "network.badge.shield.half.filled" }
-            else {
-                switch types[interface] {
-                case .wifi: name = "Wi-Fi LAN"; symbol = "wifi"
-                case .wiredEthernet: name = "USB / Ethernet"; symbol = "cable.connector"
-                default: continue
-                }
-            }
+            guard item.ifa_flags & UInt32(IFF_UP) != 0, let address = item.ifa_addr, address.pointee.sa_family == UInt8(AF_INET) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
             let value = String(cString: host)
-            if family == AF_INET && (value.hasPrefix("169.254.") || value.hasPrefix("192.0.0.")) { continue }
-            result.append(ServiceAddress(interface: interface, address: value, name: name, symbol: symbol, loopback: loopback))
+            if let listen, listen != "0.0.0.0", listen != "::", value != listen { continue }
+            if value.hasPrefix("169.254.") || value.hasPrefix("192.0.0.") || value.hasPrefix("127.") && listen != value { continue }
+            if !result.contains(value) { result.append(value) }
         }
-        // Prefer a usable LAN address when an address is reported on several interfaces.
-        func rank(_ entry: ServiceAddress) -> Int {
-            entry.name == "Wi-Fi LAN" ? 0 : entry.name == "USB / Ethernet" ? 1 : entry.loopback ? 3 : 2
-        }
-        var seen = Set<String>()
-        return result.sorted {
-            (rank($0), $0.address.contains(":") ? 1 : 0, $0.address) < (rank($1), $1.address.contains(":") ? 1 : 0, $1.address)
-        }.filter { seen.insert($0.address).inserted }
+        return result
     }
 }
 
-struct ServiceDetails: View {
-    var setEnabled: (ServiceStatus.Kind, Bool) -> Void = { _, _ in }
-    var contentHeightChanged: (CGFloat) -> Void = { _ in }
+private struct SSHConnectionDetails: View {
+    let fingerprint: String
+    @State private var authorizedKeys: Int?
+    @State private var readError: String?
+
     var body: some View {
         Group {
-            if #available(iOS 16, *) { ServiceDetailsForm(contentHeightChanged: contentHeightChanged, setEnabled: setEnabled) }
-            else { LegacyServiceDetails() }
-        }
-        .background {
-            Group {
-                if #available(iOS 26, *) { Color.clear.glassEffect(.regular, in: Rectangle()) }
-                else if #available(iOS 15, *) { Rectangle().fill(.regularMaterial) }
-                else { Color(UIColor.systemGroupedBackground) }
-            }
-            .ignoresSafeArea()
-        }
-    }
-}
-
-final class TerminalHostingController: UIHostingController<ContentView> {
-    override var keyCommands: [UIKeyCommand]? {
-        let toolbar = UIKeyCommand(input: "t", modifierFlags: [.alternate, .command], action: #selector(toggleToolbar), discoverabilityTitle: showToolbar ? "Hide Key Toolbar" : "Show Key Toolbar")
-        let remote = UIKeyCommand(input: "r", modifierFlags: [.alternate, .command], action: #selector(showRemoteAccess), discoverabilityTitle: "Remote access")
-        if #available(iOS 15, *) {
-            toolbar.wantsPriorityOverSystemBehavior = true
-            remote.wantsPriorityOverSystemBehavior = true
-        }
-        return [toolbar, remote] + (super.keyCommands ?? [])
-    }
-
-    @objc private func toggleToolbar(_ sender: UIKeyCommand) {
-        (view.window?.windowScene?.delegate as? SceneDelegate)?.toggleKeyToolbar()
-    }
-
-    @objc private func showRemoteAccess(_ sender: UIKeyCommand) {
-        (view.window?.windowScene?.delegate as? SceneDelegate)?.showRemoteAccessDetails()
-    }
-}
-
-private struct LegacyServiceDetails: View {
-    @ObservedObject var services = ServiceIndicators.shared
-    var body: some View {
-        Form {
-            if services.items.isEmpty { Text("Remote access is off") }
-            ForEach(services.items) { item in
-                Section(header: Text(item.title)) {
-                    Text("Port: " + String(item.port))
-                    Text(item.fingerprint).font(.system(.footnote, design: .monospaced))
-                    Button("Stop " + item.title) { DispatchQueue.global(qos: .userInitiated).async { item.stop() } }
-                }
-            }
-        }
-    }
-}
-
-@available(iOS 16, *)
-private struct ServiceDetailsForm: View {
-    var contentHeightChanged: (CGFloat) -> Void
-    var setEnabled: (ServiceStatus.Kind, Bool) -> Void
-    @State private var stoppingService: ServiceStatus?
-    @ObservedObject var services = ServiceIndicators.shared
-    @ObservedObject var networks = ServiceIndicators.shared.networks
-    @ObservedObject var history = RemoteAccessHistory.shared
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(ServiceStatus.Kind.allCases.filter { $0 == .ssh || RemoteRelay.available }, id: \.rawValue) { kind in
-                    Section {
-                        if let item = services.items.first(where: { $0.kind == kind }) {
-                            if let address = networks.bestAddress(for: item) {
-                                ServiceAddressRow(address: address, command: item.kind == .ssh ? item.sshCommand(host: address.address) : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
-                                    .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
-                            }
-                            NavigationLink {
-                                ServicePage(kind: kind)
-                            } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Connection details")
-                                    Text(summary(item)).font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                                }
-                            }
-                            .accessibilityIdentifier("service-details-" + kind.rawValue)
-                            .listRowInsets(EdgeInsets(top: 10, leading: 18, bottom: 10, trailing: 18))
-                        }
-                    } header: {
-                        HStack {
-                            Text(kind == .ssh ? "SSH" : "Relay").accessibilityIdentifier("service-title-" + kind.rawValue)
-                            Spacer()
-                            Toggle("Enable " + (kind == .ssh ? "SSH" : "Relay"), isOn: Binding(
-                                get: { services.items.contains { $0.kind == kind } },
-                                set: { enabled in
-                                    if !enabled, let item = services.items.first(where: { $0.kind == kind }), item.clients.contains(where: \.open) {
-                                        stoppingService = item
-                                    } else { setEnabled(kind, enabled) }
-                                }
-                            )).labelsHidden().fixedSize()
-                        }.textCase(nil)
-                    } footer: {
-                        if kind == .ssh {
-                            Text("Connect to this shell with ssh from the same network. Needs an authorized key.")
-                        } else {
-                            Text("Run shell commands over HTTPS. Needs a token and, by default, a client certificate (mTLS).")
-                        }
-                    }
-                }
-                if let error = services.controlError {
-                    Text(error).foregroundStyle(.red).textSelection(.enabled)
-                    if let range = error.range(of: ". Run: ") {
-                        let command = String(error[range.upperBound...])
-                        Button { UIPasteboard.general.string = command } label: {
-                            Text(command).font(.footnote.monospaced())
-                        }.accessibilityIdentifier("service-error-repair")
-                    }
-                }
-            }
-            .serviceCompactSections()
-            .listStyle(.insetGrouped)
-            .scrollContentBackground(.visible)
-            .serviceRootHeight(contentHeightChanged)
-            .confirmationDialog("Stop " + (stoppingService?.title ?? "service") + "?", isPresented: Binding(get: { stoppingService != nil }, set: { if !$0 { stoppingService = nil } }), titleVisibility: .visible) {
-                if let item = stoppingService {
-                    Button("Stop " + item.title, role: .destructive) { setEnabled(item.kind, false); stoppingService = nil }
-                }
-            } message: { Text("Connected clients will be disconnected.") }
-        .navigationTitle("Remote access")
-        .navigationBarTitleDisplayMode(.inline)
-        .serviceNavigationBackground()
-        }
-    }
-
-    private func summary(_ item: ServiceStatus) -> String {
-        let clients = item.clients.filter { $0.open }
-        if let first = clients.first {
-            return first.displayName + (clients.count > 1 ? " and \(clients.count - 1) more" : "")
-        }
-        if let last = history.clients.first(where: { $0.service == item.id }) {
-            let formatter = RelativeDateTimeFormatter()
-            return "Last: " + last.label + ", " + formatter.localizedString(for: last.lastSeen, relativeTo: Date())
-        }
-        return "No sessions"
-    }
-}
-
-@available(iOS 16, *)
-private struct ServicePage: View {
-    let kind: ServiceStatus.Kind
-    @ObservedObject var services = ServiceIndicators.shared
-    @ObservedObject var networks = ServiceIndicators.shared.networks
-    @ObservedObject var history = RemoteAccessHistory.shared
-    @State private var clearing = false
-    @State private var authorizedKeys: Int?
-
-    var body: some View {
-        List {
-            if let item = services.items.first(where: { $0.kind == kind }) {
-                ServiceSection(item: item, addresses: networks.addresses(for: item), authorizedKeys: authorizedKeys)
-                if kind == .ssh, let address = networks.bestAddress(for: item) {
-                    Section {
-                        let command = item.sshCommand(host: address.address)
-                        Button { UIPasteboard.general.string = command } label: {
-                            Text(command).font(.footnote.monospaced()).fixedSize(horizontal: false, vertical: true)
-                        }.buttonStyle(.plain).accessibilityIdentifier("ssh-help-connect")
-                        Text("On the client: cat ~/.ssh/id_ed25519.pub").font(.footnote.monospaced()).textSelection(.enabled)
-                        Text("On this device: chmod 700 ~/Documents/.ssh; chmod 600 ~/Documents/.ssh/authorized_keys").font(.footnote.monospaced()).textSelection(.enabled)
-                    } header: { Text("How to connect") } footer: {
-                        Text("Copy the client's public key line into ~/Documents/.ssh/authorized_keys on this device, then set the permissions above. Keep the private key on the client. Tap an address above to copy its ssh command.")
-                    }
-                }
-                if kind == .relay, let address = networks.bestAddress(for: item) {
-                    Section {
-                        ForEach(RemoteRelay.ConnectionRequest.allCases, id: \.rawValue) { request in
-                            let command = RemoteRelay.connectCommand(host: address.address, request: request)
-                            Button { UIPasteboard.general.string = command } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text("Run a command")
-                                    Text(command).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                                }
-                            }
-                            .buttonStyle(.plain)
-                            .contextMenu { Button("Copy command") { UIPasteboard.general.string = command } }
-                            .accessibilityIdentifier("relay-help-" + String(request.rawValue.dropFirst()))
-                        }
-                        Text("relay on | off | status | tokens").font(.footnote.monospaced()).textSelection(.enabled)
-                    } header: { Text("How to connect") } footer: {
-                        Text(item.mutualTLS == true ? "On this device, run relay tokens. On the client, set RELAY_TOKEN to that value and keep .relay-cert.pem, client.pem and client.key in the current folder. Tap an example to copy it." : "Copy .relay-cert.pem from this app's Documents to the client over a trusted channel. Run the copied command from that folder; it includes the token.")
-                    }
-                    if RemoteRelay.termAvailable {
-                    Section {
-                        ForEach([
-                            ("screen", "term screen --json"),
-                            ("type", "term type 'echo hello'"),
-                            ("enter", "term type --key enter"),
-                            ("wait", "term wait --text hello --timeout 5")
-                        ], id: \.0) { example in
-                            let command = RemoteRelay.connectCommand(host: address.address, command: example.1)
-                            Button { UIPasteboard.general.string = command } label: {
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(example.1).font(.footnote.monospaced())
-                                    Text(command).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                                }
-                            }.buttonStyle(.plain).accessibilityIdentifier("relay-term-" + example.0)
-                        }
-                    } header: { Text("Terminal commands") } footer: {
-                        Text("Run these from the client. Type a command, press Return, then wait for its output. Tap an example to copy the full curl request.")
-                    }
-                    }
-                    if item.mutualTLS == true {
-                        Section {
-                            Text("Use the client.pem and client.key already enrolled for this Relay.")
-                            Text("For a new client, run these commands in an empty folder on the client. Tap each command to copy it.")
-                            ForEach([
-                                "umask 077; openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 365 -subj /CN=RelayCA -addext basicConstraints=critical,CA:TRUE -keyout ca.key -out ca.pem",
-                                "openssl req -new -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -subj /CN=RelayClient -keyout client.key -out client.csr",
-                                "openssl x509 -req -in client.csr -CA ca.pem -CAkey ca.key -CAcreateserial -days 365 -out client.pem",
-                                "openssl x509 -in ca.pem -outform DER -out .relay-client-ca.der"
-                            ], id: \.self) { command in
-                                Button { UIPasteboard.general.string = command } label: {
-                                    Text(command).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                                }.buttonStyle(.plain)
-                            }
-                            Text("Copy .relay-client-ca.der to this app's Documents, then run relay off and relay on. This replaces the trusted client CA; clients signed by the previous CA will no longer connect.")
-                            Text("Copy .relay-cert.pem from this app's Documents to the client over USB or another trusted channel. Keep client.key on the client.")
-                        } header: { Text("Certificates") }
-                    }
-                }
-            } else { Text("Off") }
-            Section {
-                let connected = services.items.first(where: { $0.kind == kind })?.clients.filter(\.open) ?? []
-                let current = Set(connected.compactMap(\.credentialID))
-                let recent = history.clients.filter { $0.service == kind.rawValue && !current.contains($0.id) }
-                if connected.isEmpty && recent.isEmpty { Text("No clients connected").foregroundStyle(.secondary) }
-                ForEach(connected) { client in
-                    ServiceClientRow(client: client, kind: kind).transition(.opacity)
-                }
-                ForEach(recent) { client in
-                    NavigationLink {
-                        ServiceHistoryPage(clientID: client.id)
-                    } label: {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(client.label)
-                            (Text("Last seen ") + Text(client.lastSeen, style: .relative)).font(.footnote).foregroundStyle(.secondary)
-                            if let event = client.events.first { Text(event.kind + " · " + eventDuration(event)).font(.footnote).foregroundStyle(.secondary) }
-                        }
-                    }
-                }
-                if history.clients.contains(where: { $0.service == kind.rawValue }) {
-                    Button("Clear history", role: .destructive) { clearing = true }
-                }
-            } header: { Text("Clients") } footer: {
-                if let error = history.storageError { Text(error) }
-            }
-        }
-        .navigationTitle(kind == .ssh ? "SSH" : "Relay")
-        .serviceCompactSections()
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.visible)
-        .serviceNavigationBackground()
-        .navigationBarTitleDisplayMode(.inline)
-        .confirmationDialog("Clear history?", isPresented: $clearing, titleVisibility: .visible) {
-            Button("Clear history", role: .destructive) { history.clear(service: kind.rawValue) }
+            HStack { Text("Authentication"); Spacer(); Text("Key only").foregroundStyle(.secondary) }
+            HStack { Text("Authorized keys"); Spacer(); Text(authorizedKeys.map { $0 == 0 ? "None" : String($0) } ?? (readError == nil ? "Loading" : "Unavailable")).foregroundStyle(.secondary) }
+            if let readError { Text("Cannot read authorized_keys: " + readError).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
+            if authorizedKeys == 0 { Text("Add your client's public key to ~/Documents/.ssh/authorized_keys. Keep its private key on the client.").font(.footnote).foregroundStyle(.secondary) }
+            Text("Host key: " + fingerprint).font(.footnote.monospaced()).textSelection(.enabled)
         }
         .task {
-            guard kind == .ssh else { return }
             let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(".ssh/authorized_keys")
-            guard let handle = try? FileHandle(forReadingFrom: file) else { return }
-            defer { try? handle.close() }
-            guard let data = try? handle.read(upToCount: 65537), data.count <= 65536, let text = String(data: data, encoding: .utf8) else { return }
-            authorizedKeys = text.split(whereSeparator: \.isNewline).filter {
-                let line = $0.trimmingCharacters(in: .whitespaces)
-                return !line.isEmpty && !line.hasPrefix("#")
-            }.count
+            do {
+                let handle = try FileHandle(forReadingFrom: file)
+                defer { try? handle.close() }
+                // Foundation returns nil at EOF, including an existing empty file.
+                let data = try handle.read(upToCount: 65537) ?? Data()
+                guard data.count <= 65536 else { throw NSError(domain: "SSH", code: 1, userInfo: [NSLocalizedDescriptionKey: "File exceeds 64 KiB."]) }
+                guard let text = String(data: data, encoding: .utf8) else { throw NSError(domain: "SSH", code: 2, userInfo: [NSLocalizedDescriptionKey: "File is not UTF-8."]) }
+                authorizedKeys = text.split(whereSeparator: \.isNewline).filter { line in
+                    let value = line.trimmingCharacters(in: .whitespaces)
+                    return !value.isEmpty && !value.hasPrefix("#")
+                }.count
+                readError = nil
+            } catch { authorizedKeys = nil; readError = error.localizedDescription }
         }
-    }
-}
-
-private func eventDuration(_ event: RemoteAccessHistory.Event) -> String {
-    let formatter = DateComponentsFormatter()
-    formatter.allowedUnits = [.hour, .minute, .second]
-    formatter.unitsStyle = .abbreviated
-    formatter.maximumUnitCount = 2
-    return formatter.string(from: max(0, (event.end ?? Date()).timeIntervalSince(event.start))) ?? "0s"
-}
-
-@available(iOS 16, *)
-private struct ServiceHistoryPage: View {
-    let clientID: String
-    @ObservedObject var history = RemoteAccessHistory.shared
-
-    var body: some View {
-        List {
-            if let client = history.clients.first(where: { $0.id == clientID }) {
-                if let fingerprint = client.fingerprint {
-                    Text(fingerprint).font(.footnote.monospaced()).textSelection(.enabled)
-                }
-                ForEach(client.events) { event in
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text(event.kind == "shell" ? "shell" : event.text).font(.body.monospaced())
-                        Text((event.status.map { (event.kind == "exec" ? "exit " : "") + String($0) + " · " } ?? "") + eventDuration(event)).font(.footnote).foregroundStyle(.secondary)
-                        Text(event.start, style: .date).font(.footnote).foregroundStyle(.secondary)
-                        Text(event.address).font(.footnote.monospaced()).foregroundStyle(.secondary)
-                    }
-                }
-            }
-        }
-        .navigationTitle(history.clients.first(where: { $0.id == clientID })?.label ?? "Client")
-        .listStyle(.insetGrouped)
-        .scrollContentBackground(.hidden)
-        .serviceNavigationBackground()
-        .navigationBarTitleDisplayMode(.inline)
-    }
-}
-
-@available(iOS 16, *)
-private struct ServiceSection: View {
-    let item: ServiceStatus
-    let addresses: [ServiceAddress]
-    let authorizedKeys: Int?
-    @State private var fingerprintCopies = 0
-
-    var body: some View {
-        Section {
-            LabeledContent("Port", value: "\(item.port)").monospacedDigit().serviceNumericTransition()
-            if item.kind == .ssh {
-                LabeledContent("Authentication", value: "Key only")
-                LabeledContent("Authorized keys", value: authorizedKeys.map(String.init) ?? "Unavailable")
-                LabeledContent("Host key") { fingerprint }
-            } else {
-                LabeledContent("Client certificates") {
-                    if item.mutualTLS == true { Text("Required") }
-                    else { Text("Off, token only").foregroundStyle(.orange) }
-                }
-                LabeledContent("Server fingerprint") { fingerprint }
-            }
-            ForEach(addresses) { address in
-                ServiceAddressRow(address: address, command: item.kind == .ssh ? item.sshCommand(host: address.address) : RemoteRelay.connectCommand(host: address.address), display: address.endpoint(port: item.port))
-            }
-
-        } footer: {
-            Text("On the same Wi-Fi, use the Wi-Fi address. Elsewhere, the VPN address works only when both devices use the same VPN and it allows connections between devices, such as Tailscale or WireGuard. No app setting is needed. Use IPv6 only if the client has IPv6.")
-            if item.kind == .ssh {
-                Text("Change in ~/Documents/.ssh/sshd_config" + (authorizedKeys == 0 ? "\nAdd keys in ~/Documents/.ssh/authorized_keys" : ""))
-            }
-            else {
-                Text("Change in ~/Documents/.relay.json")
-                if item.listen == "127.0.0.1" || item.listen == "::1" { Text("Mac access: change bind to 0.0.0.0 or :: in the config and run relay on.") }
-            }
-        }
-    }
-
-    private var fingerprint: some View {
-        Button {
-            UIPasteboard.general.string = item.fingerprint
-            fingerprintCopies += 1
-        } label: {
-            Text(item.fingerprint).font(.footnote.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Copy fingerprint, " + item.fingerprint)
-        .contextMenu { Button("Copy fingerprint") { UIPasteboard.general.string = item.fingerprint } }
-        .serviceFeedback(warning: false, trigger: fingerprintCopies)
-    }
-}
-
-@available(iOS 16, *)
-private struct ServiceAddressRow: View {
-    let address: ServiceAddress
-    let command: String
-    var display: String? = nil
-    @State private var copiedCount = 0
-    @State private var copied = false
-
-    var body: some View {
-        Button {
-            UIPasteboard.general.string = command
-            copiedCount += 1
-            copied = true
-            let count = copiedCount
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2) { if count == copiedCount { copied = false } }
-        } label: {
-            LabeledContent {
-                Text(display ?? command).font(.footnote.monospaced()).lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
-            } label: {
-                Label {
-                    Text(copied ? "Copied" : address.label).foregroundStyle(Color(uiColor: .label))
-                } icon: { Image(systemName: address.symbol).foregroundStyle(.tint) }
-            }
-        }
-        .buttonStyle(.plain)
-        .contextMenu { Button("Copy command") { UIPasteboard.general.string = command } }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(copied ? "Copied" : address.label + ", " + command)
-        .serviceFeedback(warning: false, trigger: copiedCount)
-    }
-}
-
-@available(iOS 16, *)
-private struct ServiceClientRow: View {
-    let client: ServiceClient
-    let kind: ServiceStatus.Kind
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Text(client.displayName).lineLimit(1).truncationMode(.middle)
-            if kind == .ssh {
-                (Text((client.user ?? "mobile") + " · " + activity + " · since ") + Text(client.since, style: .time))
-                    .font(.footnote).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
-            } else {
-                (Text((client.certificateSubject ?? "no client certificate") + (client.open ? " · connected" : " · last request ")) + (client.open ? Text("") : Text(client.since, style: .time)))
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Text(client.address).font(.footnote.monospaced()).foregroundStyle(.secondary)
-            if let fingerprint = client.keyFingerprint ?? client.certificateFingerprint {
-                Text(fingerprint).font(.footnote.monospaced()).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
-            }
-        }
-        .accessibilityElement(children: .combine)
-    }
-
-    private var activity: String {
-        switch client.activity { case .signedIn: return "signed in"; case .shell: return "shell"; case .command(let command): return command }
-    }
-}
-
-private extension View {
-    @ViewBuilder func serviceRootHeight(_ changed: @escaping (CGFloat) -> Void) -> some View {
-        if #available(iOS 18, *) {
-            contentMargins(.top, 4, for: .scrollContent)
-            .contentMargins(.bottom, 24, for: .scrollContent)
-            .onScrollGeometryChange(for: CGFloat.self) { geometry in
-                geometry.contentSize.height
-            } action: { _, height in
-                // The root scroll content excludes the inline navigation bar.
-                changed(height + 44)
-            }
-        } else { self }
-    }
-    @ViewBuilder func serviceNavigationBackground() -> some View {
-        if #available(iOS 18, *) { containerBackground(.clear, for: .navigation) }
-        else { self }
-    }
-    @ViewBuilder func serviceCompactSections() -> some View {
-        if #available(iOS 17, *) { listSectionSpacing(.compact).contentMargins(.top, 4, for: .scrollContent) }
-        else { self }
-    }
-    @ViewBuilder func serviceNumericTransition() -> some View {
-        if #available(iOS 17, *) { contentTransition(.numericText()) }
-        else { self }
-    }
-    @ViewBuilder func serviceFeedback(warning: Bool, trigger: Int) -> some View {
-        if #available(iOS 17, *) { sensoryFeedback(warning ? .warning : .success, trigger: trigger) }
-        else { self }
     }
 }
 
@@ -973,14 +286,11 @@ struct Termview : UIViewRepresentable {
 
 
 final class TerminalContainerView: UIView {
-    private weak var terminal: TerminalView?
-    private var keyboardBottomConstraint: NSLayoutConstraint?
     private var legacyBottomConstraint: NSLayoutConstraint?
     private var keyboardFrame = CGRect.zero
     private var keyboardObservers: [NSObjectProtocol] = []
 
     init(terminal: TerminalView) {
-        self.terminal = terminal
         super.init(frame: .zero)
         terminal.translatesAutoresizingMaskIntoConstraints = false
         addSubview(terminal)
@@ -991,9 +301,7 @@ final class TerminalContainerView: UIView {
         ])
         if #available(iOS 15.0, *) {
             keyboardLayoutGuide.followsUndockedKeyboard = UIDevice.current.userInterfaceIdiom == .pad
-            let bottom = terminal.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor)
-            bottom.isActive = true
-            keyboardBottomConstraint = bottom
+            terminal.bottomAnchor.constraint(equalTo: keyboardLayoutGuide.topAnchor).isActive = true
         } else {
             let bottom = terminal.bottomAnchor.constraint(equalTo: safeAreaLayoutGuide.bottomAnchor)
             bottom.isActive = true
@@ -1019,18 +327,6 @@ final class TerminalContainerView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        if #available(iOS 15.0, *), let bottom = keyboardBottomConstraint {
-            var correction: CGFloat = 0
-            if UIDevice.current.userInterfaceIdiom == .phone, let terminal, terminal.isFirstResponder,
-               let accessory = terminal.inputAccessoryView as? PhoneKeyboardToolbar, accessory.window != nil {
-                // Self-sizing accessory changes can leave the guide one panel height behind.
-                correction = convert(accessory.bounds, from: accessory).minY - keyboardLayoutGuide.layoutFrame.minY
-            }
-            if abs(bottom.constant - correction) > 0.5 {
-                bottom.constant = correction
-                setNeedsLayout()
-            }
-        }
         updateLegacyKeyboardInset()
     }
 
@@ -1134,7 +430,6 @@ struct Webview : UIViewRepresentable {
 }
 
 public var toolbarShouldBeShown = true
-public var showToolbar = true
 public var useSystemToolbar = UIDevice.current.model.hasPrefix("iPad")
 public var isiPad = UIDevice.current.model.hasPrefix("iPad")
 public var showKeyboardAtStartup = true
@@ -1149,6 +444,10 @@ public var terminalViewHeight = 80
 private let edgeSwipeTarget = EdgeSwipeTarget()
 
 struct ContentView: View {
+    @ObservedObject private var services = ServiceIndicators.shared
+    @State private var serviceBackground = UIColor.systemBackground
+    @State private var serviceForeground = UIColor.label
+    @State private var serviceAccent = UIColor.link
     @State private var keyboardHeight: CGFloat = 0
     @State private var lastKeyboardHeight: CGFloat = 0
     @State private var frameHeight: CGFloat = 0
@@ -1222,12 +521,7 @@ struct ContentView: View {
                                 ToolbarItem(placement: .navigationBarLeading) {
                                     Button(action: {
                                         // reload wams.html at this position in history:
-                                        if (appVersion != "a-Shell-mini") {
-                                            webview.webView.load(URLRequest(url: URL(string: "https://localhost:8443/wasm.html")!))
-                                        } else {
-                                            NSLog("Loding wasm.html from 8334 (sceneWillEnterForeground)")
-                                            webview.webView.load(URLRequest(url: URL(string: "https://localhost:8334/wasm.html")!))
-                                        }
+                                        webview.webView.load(URLRequest(url: LocalServerPorts.wasmURL))
                                         localShowWebView = false
                                         showWebView = false
                                         showKeyboardAtStartup = true
@@ -1376,9 +670,27 @@ struct ContentView: View {
         .if(!(localShowWebView && showWebView)) {
             $0.ignoresSafeArea(.keyboard, edges: .bottom)
         }
-
+        .safeAreaInset(edge: .top, spacing: 0) {
+            if !services.items.isEmpty {
+                HStack {
+                    Spacer()
+                    ServiceIndicatorDots(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent))
+                }
+                .padding(.trailing, 4)
+                .background(Color(uiColor: serviceBackground))
+            }
+        }
+        .onAppear { updateServiceTheme() }
+        .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
+            updateServiceTheme()
+        }
     }
 
+    private func updateServiceTheme() {
+        serviceBackground = terminalview.view.nativeBackgroundColor
+        serviceForeground = terminalview.view.nativeForegroundColor
+        serviceAccent = terminalview.view.caretColor
+    }
 }
 
 struct ContentView_Previews: PreviewProvider {
