@@ -138,7 +138,7 @@ private struct SSHLegacyConnectionSummary: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Port: " + String(item.port))
             if let connectionDetails = item.connectionDetails { connectionDetails() }
-            ForEach(item.clients) { client in
+            ForEach(item.clients, id: \.id) { client in
                 VStack(alignment: .leading) {
                     Text((client.user ?? item.account) + " · " + client.address).font(.footnote.monospaced())
                     if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).textSelection(.enabled) }
