@@ -58,7 +58,7 @@ struct ServiceStatus: Identifiable, Equatable {
     var account: String = "mobile"
     var reportedClientCount: Int? = nil
     var connectionDetails: (() -> AnyView)? = nil
-    var color: Color = .yellow
+    var color: SwiftUI.Color = .yellow
 
     static func == (lhs: Self, rhs: Self) -> Bool {
         lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount && lhs.color == rhs.color

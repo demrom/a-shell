@@ -892,31 +892,31 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
     
     
     func setRemoteService(_ kind: String, enabled: Bool) {
-    let services = ServiceIndicators.shared
-    services.controlError = nil
-    if !enabled, !self.currentCommand.isEmpty, let item = services.items.first(where: { $0.kind.rawValue == kind }) {
-        DispatchQueue.global(qos: .userInitiated).async { item.stop() }
-        return
-    }
-    guard self.currentCommand.isEmpty else {
-        services.controlError = "Finish the terminal command before starting a service."
-        return
-    }
-    let command = kind == "ssh" ? (enabled ? "sshd on" : "sshd off") : (enabled ? "relay on" : "relay off")
-    self.commandQueue.async {
-        DispatchQueue.main.sync {
-            self.terminalView?.moveToBeginningOfLine()
-            self.terminalView?.feed(text: "\r\u{1b}[J")
+        let services = ServiceIndicators.shared
+        services.controlError = nil
+        if !enabled, !self.currentCommand.isEmpty, let item = services.items.first(where: { $0.kind.rawValue == kind }) {
+            DispatchQueue.global(qos: .userInitiated).async { item.stop() }
+            return
         }
-    }
-    self.executeCommand(command: command)
-    self.commandQueue.async {
-        DispatchQueue.main.async {
-            self.terminalView?.feed(text: self.commandBeforeCursor)
-            self.terminalView?.saveCursorPosition()
-            self.terminalView?.feed(text: self.commandAfterCursor)
-            self.terminalView?.restoreCursorPosition()
+        guard self.currentCommand.isEmpty else {
+            services.controlError = "Finish the terminal command before starting a service."
+            return
         }
+        let command = kind == "ssh" ? (enabled ? "sshd on" : "sshd off") : (enabled ? "relay on" : "relay off")
+        self.commandQueue.async {
+            DispatchQueue.main.sync {
+                self.terminalView?.moveToBeginningOfLine()
+                self.terminalView?.feed(text: "\r\u{1b}[J")
+            }
+        }
+        self.executeCommand(command: command)
+        self.commandQueue.async {
+            DispatchQueue.main.async {
+                self.terminalView?.feed(text: self.commandBeforeCursor)
+                self.terminalView?.saveCursorPosition()
+                self.terminalView?.feed(text: self.commandAfterCursor)
+                self.terminalView?.restoreCursorPosition()
+            }
     }
     }
 
