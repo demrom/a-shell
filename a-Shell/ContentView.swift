@@ -61,43 +61,37 @@ final class ServiceIndicators: ObservableObject {
 
 struct SSHServiceDetails: View {
     let items: [ServiceIndicator]
-    let background: SwiftUI.Color
-    let foreground: SwiftUI.Color
-    let accent: SwiftUI.Color
+    @Environment(\.dismiss) private var dismiss
 
-    var body: some View { details }
-
-    @ViewBuilder private var details: some View {
-        let content = VStack(alignment: .leading, spacing: 16) {
-            if items.isEmpty { Text("SSH is off. Start it with sshd on.") }
-            ForEach(items) { item in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(item.title).font(.headline)
-                    if item.connectionDetails != nil { SSHLegacyConnectionSummary(item: item) }
-                    ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
-                        Text(line).font(.subheadline).textSelection(.enabled)
-                    }
-                    if let stop = item.stop {
-                        Button("Stop " + item.title, role: .destructive) {
-                            DispatchQueue.global(qos: .userInitiated).async { stop() }
+    private var content: some View {
+        NavigationView {
+            Form {
+                if items.isEmpty { Text("SSH is off. Start it with sshd on.") }
+                ForEach(items) { item in
+                    Section(header: Text(item.title)) {
+                        if item.connectionDetails != nil { SSHLegacyConnectionSummary(item: item) }
+                        ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
+                            Text(line).font(.subheadline).textSelection(.enabled)
                         }
-                        .foregroundColor(accent)
-                        .accessibilityIdentifier("service-stop-" + item.id)
+                        if let stop = item.stop {
+                            Button("Stop " + item.title, role: .destructive) {
+                                DispatchQueue.global(qos: .userInitiated).async { stop() }
+                            }
+                            .accessibilityIdentifier("service-stop-" + item.id)
+                        }
                     }
                 }
             }
+            .navigationTitle("Remote access")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
-        .padding()
-        .frame(idealWidth: 280, maxWidth: 320, alignment: .leading)
-        .fixedSize(horizontal: false, vertical: true)
-        .foregroundColor(foreground)
-        .background(background)
-        .tint(accent)
-        if #available(iOS 16.4, *) {
-            content.presentationCompactAdaptation(.popover).presentationBackground(background)
-        } else {
-            content
-        }
+        .navigationViewStyle(.stack)
+    }
+
+    var body: some View {
+        if #available(iOS 16, *) { content.presentationDetents([.medium, .large]) }
+        else { content }
     }
 }
 
@@ -435,9 +429,6 @@ struct ContentView: View {
     @ObservedObject private var services = ServiceIndicators.shared
     @State private var showingRemoteAccess = false
     @State private var restoresRemoteKeyboard = false
-    @State private var serviceBackground = UIColor.systemBackground
-    @State private var serviceForeground = UIColor.label
-    @State private var serviceAccent = UIColor.link
     @State private var keyboardHeight: CGFloat = 0
     @State private var lastKeyboardHeight: CGFloat = 0
     @State private var frameHeight: CGFloat = 0
@@ -669,7 +660,7 @@ struct ContentView: View {
             if restoresRemoteKeyboard { terminalview.view.becomeFirstResponder() }
             restoresRemoteKeyboard = false
         }) {
-            SSHServiceDetails(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent))
+            SSHServiceDetails(items: services.items)
         }
         .onReceive(NotificationCenter.default.publisher(for: .init("remoteAccessShortcut"))) { note in
             guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
@@ -680,10 +671,7 @@ struct ContentView: View {
             registerRemoteToolbarItem()
         }
         .onReceive(services.$items) { items in registerRemoteToolbarItem(items: items) }
-        .onAppear { updateServiceTheme(); registerRemoteToolbarItem() }
-        .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
-            updateServiceTheme()
-        }
+        .onAppear { registerRemoteToolbarItem() }
     }
 
     private func showRemoteAccess() {
@@ -709,11 +697,6 @@ struct ContentView: View {
         NotificationCenter.default.post(name: .init("phoneToolbarRegisterRemoteAccess"), object: scene, userInfo: ["item": item])
     }
 
-    private func updateServiceTheme() {
-        serviceBackground = terminalview.view.nativeBackgroundColor
-        serviceForeground = terminalview.view.nativeForegroundColor
-        serviceAccent = terminalview.view.caretColor
-    }
 }
 
 struct ContentView_Previews: PreviewProvider {
