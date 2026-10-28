@@ -68,6 +68,7 @@ private extension View {
 
 struct SSHServiceDetails: View {
     let items: [ServiceIndicator]
+    @State private var sheetHeight: CGFloat = 320
     @Environment(\.presentationMode) private var presentationMode
 
     private var content: some View {
@@ -97,7 +98,7 @@ struct SSHServiceDetails: View {
                     }
                 }
             }
-            .modifier(SSHSheetSizing())
+            .modifier(SSHSheetSizing(height: $sheetHeight))
             .navigationTitle("Remote access")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presentationMode.wrappedValue.dismiss() } } }
@@ -106,14 +107,18 @@ struct SSHServiceDetails: View {
     }
 
     var body: some View {
-        if #available(iOS 18, *) { content }
+        if #available(iOS 18, *) {
+            content
+                .presentationDetents([.height(sheetHeight), .large])
+                .presentationDragIndicator(.visible)
+        }
         else if #available(iOS 16, *) { content.presentationDetents([.medium, .large]) }
         else { content }
     }
 }
 
 private struct SSHSheetSizing: ViewModifier {
-    @State private var height: CGFloat = 320
+    @Binding var height: CGFloat
 
     func body(content: Content) -> some View {
         if #available(iOS 18, *) {
@@ -123,8 +128,6 @@ private struct SSHSheetSizing: ViewModifier {
                 } action: { _, measured in
                     height = max(1, ceil(measured))
                 }
-                .presentationDetents([.height(height), .large])
-                .presentationDragIndicator(.visible)
         } else { content }
     }
 }
