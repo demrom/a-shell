@@ -437,14 +437,11 @@ struct ServiceDetails: View {
             if #available(iOS 16, *) { ServiceDetailsForm(setEnabled: setEnabled) }
             else { LegacyServiceDetails() }
         }
-        .background {
-            Group {
-                if #available(iOS 26, *) { Color.clear.glassEffect(.regular, in: Rectangle()) }
-                else if #available(iOS 15, *) { Rectangle().fill(.regularMaterial) }
-                else { Color(UIColor.systemGroupedBackground) }
-            }
-            .ignoresSafeArea()
-        }
+        .background(Group {
+            if #available(iOS 26, *) { Color.clear.glassEffect(.regular, in: Rectangle()) }
+            else if #available(iOS 15, *) { Rectangle().fill(.regularMaterial) }
+            else { Color(UIColor.systemGroupedBackground) }
+        }.ignoresSafeArea())
     }
 }
 
@@ -1319,8 +1316,11 @@ struct ContentView: View {
         let items = items ?? services.items
         let active = items.contains { $0.clients.contains { $0.open } }
         let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
-        let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label])
-        let image = UIImage(systemName: symbol)?.withConfiguration(configuration)
+        var image = UIImage(systemName: symbol)
+        if #available(iOS 15, *) {
+            let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label])
+            image = image?.withConfiguration(configuration)
+        }
         let action = UIAction(title: "Remote access", image: image) { [weak scene] _ in
             guard let scene else { return }
             let release = NSSelectorFromString("releaseToolbarControl")
