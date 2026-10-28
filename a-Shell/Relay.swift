@@ -141,9 +141,8 @@ struct RelayConfiguration: Codable {
     var port: UInt16 = LocalServerPorts.relay
     var mutualTLS = true
     var token: String
-    var indicator = true
 
-    private enum CodingKeys: String, CodingKey { case enabled, bind, port, mutualTLS, token, indicator }
+    private enum CodingKeys: String, CodingKey { case enabled, bind, port, mutualTLS, token }
 
     init(token: String) { self.token = token }
 
@@ -154,7 +153,6 @@ struct RelayConfiguration: Codable {
         port = try values.decode(UInt16.self, forKey: .port)
         mutualTLS = try values.decode(Bool.self, forKey: .mutualTLS)
         token = try values.decode(String.self, forKey: .token)
-        indicator = try values.decodeIfPresent(Bool.self, forKey: .indicator) ?? true
     }
 
     func connectCommand(host: String, command: String = "pwd") -> String {
@@ -178,7 +176,6 @@ struct RelayConfiguration: Codable {
             "bind: \(bind)",
             "port: \(port)",
             "mutualTLS: \(mutualTLS)",
-            "indicator: \(indicator)",
             "output limit: 8 MiB per stream; HTTP 413 and command stopped if exceeded",
             "execution timeout: none",
             "server certificate: \(directory.appendingPathComponent(".relay-cert.pem").path)",
@@ -629,8 +626,6 @@ import SwiftUI
 final class Relay: ObservableObject {
     static let shared = Relay()
     @Published private(set) var indicatorConnections: Int?
-    @Published private(set) var indicatorRecent = false
-    private var indicatorReset: DispatchWorkItem?
     private let queue = DispatchQueue(label: "relay.control")
     private var indicatorGeneration = UUID()
     private var server: RelayServer?
@@ -790,42 +785,28 @@ final class Relay: ObservableObject {
         let port = Int(server?.port ?? server?.configuration.port ?? LocalServerPorts.relay)
         let bind = server?.configuration.bind
         let clients = server?.clientSnapshot ?? []
-        let showsIndicator = server?.configuration.indicator ?? true
         var certificate: SecCertificate?
         if let server { SecIdentityCopyCertificate(server.tls.identity, &certificate) }
         let fingerprint = certificate.map { SHA256.hash(data: SecCertificateCopyData($0) as Data).map { String(format: "%02X", $0) }.joined(separator: ":") } ?? "unavailable"
         DispatchQueue.main.async { [self] in
-            self.indicatorReset?.cancel()
-            self.indicatorReset = nil
-            if let connections {
-                if connections > 0 { self.indicatorRecent = true }
-                else if self.indicatorRecent {
-                    let reset = DispatchWorkItem { [weak self] in
-                        self?.indicatorRecent = false
-                        self?.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients, showsIndicator: showsIndicator)
-                    }
-                    self.indicatorReset = reset
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 10, execute: reset)
-                }
-            } else { self.indicatorRecent = false }
             self.indicatorConnections = connections
-            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients, showsIndicator: showsIndicator)
+            self.publishIndicator(endpoint: endpoint, mutualTLS: mutualTLS, port: port, bind: bind, fingerprint: fingerprint, clients: clients)
         }
     }
 
-    private func publishIndicator(endpoint: String?, mutualTLS: Bool, port: Int, bind: String?, fingerprint: String, clients: [ServiceIndicator.Client], showsIndicator: Bool) {
+    private func publishIndicator(endpoint: String?, mutualTLS: Bool, port: Int, bind: String?, fingerprint: String, clients: [ServiceIndicator.Client]) {
         guard let connections = indicatorConnections else {
             ServiceIndicators.shared.remove(id: "relay")
             return
         }
-        ServiceIndicators.shared.set(ServiceIndicator(id: "relay", color: connections > 0 || indicatorRecent ? .green : .yellow, title: "Relay", details: [
+        ServiceIndicators.shared.set(ServiceIndicator(id: "relay", title: "Relay", details: [
             "State: listening",
             "Address: \(endpoint ?? "starting")",
             "Connected clients: \(connections)",
             "HTTPS, mutual TLS \(mutualTLS ? "on" : "off")"
         ], stop: { [weak self] in
             DispatchQueue.global(qos: .userInitiated).async { _ = self?.command("off") }
-        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, showsIndicator: showsIndicator, clients: clients))
+        }, port: port, listen: bind, fingerprint: fingerprint, mutualTLS: mutualTLS, activeClientCount: clients.filter(\.open).count, clients: clients))
     }
 
     private static func execute(_ command: String, cwd: String, overflow: @escaping () -> Void) -> RelayServer.Result {

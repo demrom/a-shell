@@ -16,7 +16,6 @@ import Darwin
 
 struct ServiceIndicator: Identifiable {
     let id: String
-    let color: SwiftUI.Color
     let title: String
     let details: [String]
     var stop: (() -> Void)? = nil
@@ -25,7 +24,6 @@ struct ServiceIndicator: Identifiable {
     var fingerprint = ""
     var mutualTLS: Bool? = nil
     var activeClientCount = 0
-    var showsIndicator = true
 
     struct Client {
         let id: String
@@ -59,11 +57,9 @@ struct ServiceStatus: Identifiable, Equatable {
     var account: String = "mobile"
     var reportedClientCount: Int? = nil
     var connectionDetails: (() -> AnyView)? = nil
-    var color: SwiftUI.Color = .yellow
-    var showsIndicator = true
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount && lhs.color == rhs.color && lhs.showsIndicator == rhs.showsIndicator
+        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount
     }
 
     func sshCommand(host: String) -> String {
@@ -176,7 +172,7 @@ final class ServiceIndicators: ObservableObject {
                 activity: kind == .ssh ? (client.activity == 2 ? .command(client.command ?? "") : client.activity == 1 ? .shell : .signedIn) : client.command.map { .command($0) } ?? .signedIn,
                 certificateSubject: client.subject, since: client.since, open: client.open, keyName: client.keyName, keyFingerprint: client.keyFingerprint, certificateFingerprint: client.fingerprint)
         }
-        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails, color: item.color, showsIndicator: item.showsIndicator))
+        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails))
     }
 
     func set(_ item: ServiceStatus) {
@@ -856,33 +852,6 @@ private extension View {
 }
 
 
-struct ServiceIndicatorDots: View {
-    let items: [ServiceStatus]
-    let background: SwiftUI.Color
-    let foreground: SwiftUI.Color
-    let accent: SwiftUI.Color
-    var showDetails: () -> Void
-
-    var body: some View {
-        Button(action: showDetails) {
-            HStack(spacing: 8) {
-                ForEach(items) { item in
-                    Circle().fill(item.color)
-                        .overlay(Circle().stroke(foreground.opacity(0.7), lineWidth: 0.5))
-                        .frame(width: 8, height: 8)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Remote access")
-        .accessibilityValue(items.map(\.title).joined(separator: ", "))
-        .accessibilityIdentifier("service-indicators")
-    }
-}
-
 private func setRemoteService(_ kind: ServiceStatus.Kind, enabled: Bool, terminal: TerminalView) {
     (terminal.terminalDelegate as? SceneDelegate)?.setRemoteService(kind.rawValue, enabled: enabled)
 }
@@ -1098,9 +1067,6 @@ struct ContentView: View {
     @ObservedObject private var services = ServiceIndicators.shared
     @State private var showingRemoteAccess = false
     @State private var restoresRemoteKeyboard = false
-    @State private var serviceBackground = UIColor.systemBackground
-    @State private var serviceForeground = UIColor.label
-    @State private var serviceAccent = UIColor.link
     @State private var keyboardHeight: CGFloat = 0
     @State private var lastKeyboardHeight: CGFloat = 0
     @State private var frameHeight: CGFloat = 0
@@ -1323,20 +1289,6 @@ struct ContentView: View {
         .if(!(localShowWebView && showWebView)) {
             $0.ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if services.items.contains(where: \.showsIndicator) {
-                HStack {
-                    Spacer()
-                    ServiceIndicatorDots(items: services.items.filter(\.showsIndicator), background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent)) {
-                        restoresRemoteKeyboard = terminalview.view.isFirstResponder
-                        terminalview.view.resignFirstResponder()
-                        showingRemoteAccess = true
-                    }
-                }
-                .padding(.trailing, 4)
-                .background(Color(uiColor: serviceBackground))
-            }
-        }
         .sheet(isPresented: $showingRemoteAccess, onDismiss: {
             if restoresRemoteKeyboard { terminalview.view.becomeFirstResponder() }
             restoresRemoteKeyboard = false
@@ -1345,14 +1297,20 @@ struct ContentView: View {
                 setRemoteService(kind, enabled: enabled, terminal: terminalview.view)
             }).remoteAccessDetents()
         }
-        .onAppear { updateServiceTheme(); registerRemoteToolbarItem() }
+        .onReceive(NotificationCenter.default.publisher(for: .init("remoteAccessShortcut"))) { note in
+            guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
+            restoresRemoteKeyboard = terminalview.view.isFirstResponder
+            terminalview.view.resignFirstResponder()
+            showingRemoteAccess = true
+        }
+        .onAppear { registerRemoteToolbarItem() }
         .onReceive(NotificationCenter.default.publisher(for: .init("phoneToolbarRequestsRemoteAccess"))) { note in
             guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
             registerRemoteToolbarItem()
         }
         .onReceive(services.$items) { items in registerRemoteToolbarItem(items: items) }
         .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
-            updateServiceTheme()
+            registerRemoteToolbarItem()
         }
     }
 
@@ -1361,7 +1319,7 @@ struct ContentView: View {
         let items = items ?? services.items
         let active = items.contains { $0.clients.contains { $0.open } }
         let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
-        let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? serviceAccent : .label])
+        let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label])
         let image = UIImage(systemName: symbol)?.withConfiguration(configuration)
         let action = UIAction(title: "Remote access", image: image) { [weak scene] _ in
             guard let scene else { return }
@@ -1379,11 +1337,7 @@ struct ContentView: View {
         NotificationCenter.default.post(name: .init("phoneToolbarRegisterRemoteAccess"), object: scene, userInfo: ["item": item])
     }
 
-    private func updateServiceTheme() {
-        serviceBackground = terminalview.view.nativeBackgroundColor
-        serviceForeground = terminalview.view.nativeForegroundColor
-        serviceAccent = terminalview.view.caretColor
-    }
+
 }
 
 struct ContentView_Previews: PreviewProvider {

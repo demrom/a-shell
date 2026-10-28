@@ -123,7 +123,7 @@ Run `relay status` once to create `~/Documents/.relay.json` with a random token.
 
 With mutual TLS on, status keeps the token hidden and uses `$RELAY_TOKEN` in the curl command. Run `relay tokens` explicitly to retrieve it and set that variable on the Mac. With mutual TLS off, status prints the full token and includes it in the curl command, together with a warning that anyone reaching the port with that token can execute commands. Treat that status output as a credential. `relay on`, `relay off` and startup never print credentials.
 
-Every field below except `indicator` is required in `.relay.json`. Changes take effect on `relay on` or the next app launch. Invalid configuration prevents startup.
+Every field below is required in `.relay.json`. Changes take effect on `relay on` or the next app launch. Invalid configuration prevents startup.
 
 | Field | Default | Meaning |
 | --- | --- | --- |
@@ -131,10 +131,9 @@ Every field below except `indicator` is required in `.relay.json`. Changes take 
 | `bind` | `"127.0.0.1"` | Numeric IPv4 or IPv6 address. Loopback accepts connections only from this device. Set `"0.0.0.0"` for all IPv4 interfaces, `"::"` for IPv6, or a specific interface address to connect from a Mac. |
 | `port` | `8765` (full), `8766` (mini) | TCP port, from 0 to 65535. Zero asks the OS to choose a port; `relay status` reports it. |
 | `mutualTLS` | `true` | Require a client certificate signed by the CA enrolled in `.relay-client-ca.der`. Missing or invalid enrollment prevents startup. Set `false` explicitly to accept clients without certificates. HTTPS and the token remain required. |
-| `indicator` | `true` | Show a small yellow dot while listening and a green dot when clients connect. Tap the dots group for state, address, port, connected clients and Stop. Set `false` to hide it. Older config files that omit this field use `true`. |
 | `token` | Random 256-bit value | Value of the `X-Token` request header. Must contain 32 to 256 printable ASCII characters without spaces. Use `relay tokens` to retrieve it; `relay status` also prints it when mutual TLS is off. |
 
-The indicator sits in a separate row above the terminal text and follows the active terminal theme. Other running services can add adjacent dots to the same group. The group has one tap target of at least 44 by 44 points and opens one popover with a section for each service. The relay dot stays green for ten seconds after the last connection closes. It disappears when relay stops or `indicator` is false. On iOS 16.4 and later, details open in a compact popover; earlier iOS versions use the system's adaptive presentation.
+The optional phone toolbar's Remote access key opens a sheet with service switches and connection details. Its glyph uses the system label color while a service is on and idle, accent waves while in use, and a struck-through glyph while off. Command-Option-R opens the sheet even when the toolbar is hidden. No service status floats over terminal text. Older configuration files may still contain `indicator`; that unused field is ignored.
 
 `/run` passes the submitted line directly to `ios_system`, just as the a-Shell terminal does, without an extra shell layer. Native commands, pipes and redirections follow a-Shell's command syntax. For compound commands, explicitly invoke an available shell, for example `sh -c 'echo first && echo second'`, or run a script file with its interpreter. The chosen interpreter determines which shell syntax and commands are available.
 
