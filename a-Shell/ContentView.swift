@@ -98,23 +98,13 @@ struct ServiceClient: Identifiable, Equatable {
     }
 }
 
-// Relay is optional: its PR supplies this bridge when linked into the app.
 private enum RemoteRelay {
     enum ConnectionRequest: String, CaseIterable { case run = "/run" }
     static var termAvailable: Bool { (commandsAsArray() as? [String])?.contains("term") == true }
-    static var available: Bool { dlsym(UnsafeMutableRawPointer(bitPattern: -2), "ashell_relay_connect_command") != nil }
 
     static func connectCommand(host: String, request: ConnectionRequest = .run, command: String? = nil) -> String {
-        typealias Generate = @convention(c) (UnsafePointer<CChar>, UnsafePointer<CChar>, UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>?
-        guard let symbol = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "ashell_relay_connect_command") else { return "" }
-        let generate = unsafeBitCast(symbol, to: Generate.self)
-        return host.withCString { host in
-            request.rawValue.withCString { route in
-                let result = command.map { $0.withCString { generate(host, route, $0) } } ?? generate(host, route, nil)
-                guard let result else { return "" }
-                defer { free(result) }
-                return String(cString: result)
-            }
+        switch request {
+        case .run: return Relay.shared.connectCommand(host: host, command: command ?? "pwd")
         }
     }
 }
@@ -473,7 +463,7 @@ private struct ServiceDetailsForm: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(ServiceStatus.Kind.allCases.filter { $0 == .ssh ? (commandsAsArray() as? [String])?.contains("sshd") == true : RemoteRelay.available }, id: \.rawValue) { kind in
+                ForEach(ServiceStatus.Kind.allCases.filter { $0 == .relay || (commandsAsArray() as? [String])?.contains("sshd") == true }, id: \.rawValue) { kind in
                     Section {
                         if let item = services.items.first(where: { $0.kind == kind }) {
                             ForEach(networks.addresses(for: item)) { address in

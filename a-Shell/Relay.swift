@@ -916,13 +916,3 @@ public func relayMain(_ argc: Int32, _ argv: UnsafeMutablePointer<UnsafeMutableP
     return status
 }
 #endif
-
-#if os(iOS)
-// The optional shared UI owns and frees the returned command buffer.
-@_cdecl("ashell_relay_connect_command")
-public func relayConnectCommand(_ host: UnsafePointer<CChar>?, _ route: UnsafePointer<CChar>?, _ command: UnsafePointer<CChar>?) -> UnsafeMutablePointer<CChar>? {
-    guard let host, let route, String(cString: route) == "/run" else { return nil }
-    let result = Relay.shared.connectCommand(host: String(cString: host), command: command.map { String(cString: $0) } ?? "pwd")
-    return result.isEmpty ? nil : strdup(result)
-}
-#endif
