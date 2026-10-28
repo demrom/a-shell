@@ -58,9 +58,10 @@ struct ServiceStatus: Identifiable, Equatable {
     var account: String = "mobile"
     var reportedClientCount: Int? = nil
     var connectionDetails: (() -> AnyView)? = nil
+    var color: Color = .yellow
 
     static func == (lhs: Self, rhs: Self) -> Bool {
-        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount
+        lhs.kind == rhs.kind && lhs.port == rhs.port && lhs.listen == rhs.listen && lhs.fingerprint == rhs.fingerprint && lhs.mutualTLS == rhs.mutualTLS && lhs.account == rhs.account && lhs.clients == rhs.clients && lhs.reportedClientCount == rhs.reportedClientCount && lhs.color == rhs.color
     }
 
     func sshCommand(host: String) -> String {
@@ -173,7 +174,7 @@ final class ServiceIndicators: ObservableObject {
                 activity: kind == .ssh ? (client.activity == 2 ? .command(client.command ?? "") : client.activity == 1 ? .shell : .signedIn) : client.command.map { .command($0) } ?? .signedIn,
                 certificateSubject: client.subject, since: client.since, open: client.open, keyName: client.keyName, keyFingerprint: client.keyFingerprint, certificateFingerprint: client.fingerprint)
         }
-        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails))
+        set(ServiceStatus(kind: kind, port: item.port, listen: item.listen, fingerprint: item.fingerprint, mutualTLS: item.mutualTLS, clients: clients, stop: { item.stop?() }, account: item.account, reportedClientCount: item.activeClientCount, connectionDetails: item.connectionDetails, color: item.color))
     }
 
     func set(_ item: ServiceStatus) {
@@ -860,7 +861,7 @@ struct ServiceIndicatorDots: View {
         Button(action: showDetails) {
             HStack(spacing: 8) {
                 ForEach(items) { item in
-                    Circle().fill(item.activeClientCount > 0 ? Color.green : Color.yellow)
+                    Circle().fill(item.color)
                         .overlay(Circle().stroke(foreground.opacity(0.7), lineWidth: 0.5))
                         .frame(width: 8, height: 8)
                 }
@@ -877,33 +878,7 @@ struct ServiceIndicatorDots: View {
 }
 
 private func setRemoteService(_ kind: ServiceStatus.Kind, enabled: Bool, terminal: TerminalView) {
-    guard let scene = terminal.terminalDelegate as? SceneDelegate else { return }
-    let services = ServiceIndicators.shared
-    services.controlError = nil
-    if !enabled, !scene.currentCommand.isEmpty, let item = services.items.first(where: { $0.kind == kind }) {
-        DispatchQueue.global(qos: .userInitiated).async { item.stop() }
-        return
-    }
-    guard scene.currentCommand.isEmpty else {
-        services.controlError = "Finish the terminal command before starting a service."
-        return
-    }
-    let command = kind.rawValue == "ssh" ? (enabled ? "sshd on" : "sshd off") : (enabled ? "relay on" : "relay off")
-    scene.commandQueue.async {
-        DispatchQueue.main.sync {
-            terminal.moveToBeginningOfLine()
-            terminal.feed(text: "\r\u{1b}[J")
-        }
-    }
-    scene.executeCommand(command: command)
-    scene.commandQueue.async {
-        DispatchQueue.main.async {
-            terminal.feed(text: scene.commandBeforeCursor)
-            terminal.saveCursorPosition()
-            terminal.feed(text: scene.commandAfterCursor)
-            terminal.restoreCursorPosition()
-        }
-    }
+    (terminal.terminalDelegate as? SceneDelegate)?.setRemoteService(kind.rawValue, enabled: enabled)
 }
 
 private extension View {
