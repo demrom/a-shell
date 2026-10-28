@@ -110,7 +110,7 @@ struct ServiceIndicatorDots: View {
                     }
                     if let stop = item.stop {
                         Button("Stop " + item.title, role: .destructive) {
-                            stop()
+                            DispatchQueue.global(qos: .userInitiated).async { stop() }
                         }
                         .foregroundColor(accent)
                         .accessibilityIdentifier("service-stop-" + item.id)
@@ -208,12 +208,22 @@ private enum SSHConnectionAddresses {
         while let current = cursor {
             defer { cursor = current.pointee.ifa_next }
             let item = current.pointee
-            guard item.ifa_flags & UInt32(IFF_UP) != 0, let address = item.ifa_addr, address.pointee.sa_family == UInt8(AF_INET) else { continue }
+            guard item.ifa_flags & UInt32(IFF_UP) != 0, let address = item.ifa_addr else { continue }
+            let interface = String(cString: item.ifa_name)
+            let loopback = item.ifa_flags & UInt32(IFF_LOOPBACK) != 0
+            guard loopback || interface.hasPrefix("en") || interface.hasPrefix("utun") || interface.hasPrefix("ipsec") else { continue }
+            let family = Int32(address.pointee.sa_family)
+            let ipv6 = listen?.contains(":") == true
+            guard family == (ipv6 ? AF_INET6 : AF_INET) else { continue }
+            if family == AF_INET6 {
+                let bytes = UnsafeRawPointer(address).assumingMemoryBound(to: sockaddr_in6.self).pointee.sin6_addr
+                if withUnsafeBytes(of: bytes, { $0[0] == 0xfe && $0[1] & 0xc0 == 0x80 }) { continue }
+            }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(address, socklen_t(address.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
             let value = String(cString: host)
             if let listen, listen != "0.0.0.0", listen != "::", value != listen { continue }
-            if value.hasPrefix("169.254.") || value.hasPrefix("192.0.0.") || value.hasPrefix("127.") && listen != value { continue }
+            if value.hasPrefix("169.254.") || value.hasPrefix("192.0.0.") || loopback && listen != value { continue }
             if !result.contains(value) { result.append(value) }
         }
         return result
@@ -530,9 +540,10 @@ struct ContentView: View {
                                 ToolbarItem(placement: .navigationBarLeading) {
                                     Button(action: {
                                         // reload wams.html at this position in history:
-                                        if appVersion != "a-Shell-mini" {
+                                        if (appVersion != "a-Shell-mini") {
                                             webview.webView.load(URLRequest(url: URL(string: "https://localhost:8443/wasm.html")!))
                                         } else {
+                                            NSLog("Loding wasm.html from 8334 (sceneWillEnterForeground)")
                                             webview.webView.load(URLRequest(url: URL(string: "https://localhost:8334/wasm.html")!))
                                         }
                                         localShowWebView = false
