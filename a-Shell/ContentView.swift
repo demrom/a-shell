@@ -13,6 +13,7 @@ import WebKit
 import ios_system
 import Network
 import Darwin
+import CFNetwork
 
 struct ServiceIndicator: Identifiable {
     let id: String
@@ -374,6 +375,8 @@ final class ServiceNetworks: ObservableObject {
     }
 
     private static func read(_ path: NWPath) -> [ServiceAddress] {
+        let proxySettings = CFNetworkCopySystemProxySettings()?.takeRetainedValue() as? [String: Any]
+        let scopedInterfaces = proxySettings?["__SCOPED__"] as? [String: Any] ?? [:]
         let types = Dictionary(path.availableInterfaces.map { ($0.name, $0.type) }, uniquingKeysWith: { first, _ in first })
         var interfaces: UnsafeMutablePointer<ifaddrs>?
         guard getifaddrs(&interfaces) == 0 else { return [] }
@@ -395,7 +398,11 @@ final class ServiceNetworks: ObservableObject {
             let loopback = item.ifa_flags & UInt32(IFF_LOOPBACK) != 0
             let name: String, symbol: String
             if loopback { name = "This device only"; symbol = "iphone" }
-            else if interface.hasPrefix("utun") || interface.hasPrefix("ipsec") { name = "VPN"; symbol = "network.badge.shield.half.filled" }
+            else if interface.hasPrefix("utun") || interface.hasPrefix("ipsec") {
+                // iOS leaves system tunnels up even when the user's VPN is off.
+                guard item.ifa_flags & UInt32(IFF_POINTOPOINT) != 0, scopedInterfaces[interface] != nil else { continue }
+                name = "VPN"; symbol = "network.badge.shield.half.filled"
+            }
             else {
                 switch types[interface] {
                 case .wifi: name = "Wi-Fi LAN"; symbol = "wifi"
