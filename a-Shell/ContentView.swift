@@ -211,7 +211,7 @@ private enum SSHConnectionAddresses {
             guard item.ifa_flags & UInt32(IFF_UP) != 0, let address = item.ifa_addr else { continue }
             let interface = String(cString: item.ifa_name)
             let loopback = item.ifa_flags & UInt32(IFF_LOOPBACK) != 0
-            guard loopback || interface.hasPrefix("en") || interface.hasPrefix("utun") || interface.hasPrefix("ipsec") else { continue }
+            guard loopback || interface.hasPrefix("en") || interface.hasPrefix("bridge") || interface.hasPrefix("utun") || interface.hasPrefix("ipsec") else { continue }
             let family = Int32(address.pointee.sa_family)
             let ipv6 = listen?.contains(":") == true
             guard family == (ipv6 ? AF_INET6 : AF_INET) else { continue }
