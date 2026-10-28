@@ -59,9 +59,16 @@ final class ServiceIndicators: ObservableObject {
     }
 }
 
+private extension View {
+    @ViewBuilder func sshTextSelection() -> some View {
+        if #available(iOS 15, *) { self.textSelection(.enabled) }
+        else { self }
+    }
+}
+
 struct SSHServiceDetails: View {
     let items: [ServiceIndicator]
-    @Environment(\.dismiss) private var dismiss
+    @Environment(\.presentationMode) private var presentationMode
 
     private var content: some View {
         NavigationView {
@@ -71,20 +78,28 @@ struct SSHServiceDetails: View {
                     Section(header: Text(item.title)) {
                         if item.connectionDetails != nil { SSHLegacyConnectionSummary(item: item) }
                         ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
-                            Text(line).font(.subheadline).textSelection(.enabled)
+                            Text(line).font(.subheadline).sshTextSelection()
                         }
                         if let stop = item.stop {
-                            Button("Stop " + item.title, role: .destructive) {
-                                DispatchQueue.global(qos: .userInitiated).async { stop() }
+                            if #available(iOS 15, *) {
+                                Button("Stop " + item.title, role: .destructive) {
+                                    DispatchQueue.global(qos: .userInitiated).async { stop() }
+                                }
+                                .accessibilityIdentifier("service-stop-" + item.id)
+                            } else {
+                                Button("Stop " + item.title) {
+                                    DispatchQueue.global(qos: .userInitiated).async { stop() }
+                                }
+                                .foregroundColor(.red)
+                                .accessibilityIdentifier("service-stop-" + item.id)
                             }
-                            .accessibilityIdentifier("service-stop-" + item.id)
                         }
                     }
                 }
             }
             .navigationTitle("Remote access")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presentationMode.wrappedValue.dismiss() } } }
         }
         .navigationViewStyle(.stack)
     }
@@ -103,12 +118,12 @@ private struct SSHLegacyConnectionSummary: View {
             if let connectionDetails = item.connectionDetails { connectionDetails() }
             ForEach(item.clients, id: \.id) { client in
                 VStack(alignment: .leading) {
-                    Text((client.user ?? item.account) + " · " + client.address).font(.footnote.monospaced())
-                    if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).textSelection(.enabled) }
+                    Text((client.user ?? item.account) + " · " + client.address).font(.system(.footnote, design: .monospaced))
+                    if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).sshTextSelection() }
                 }
             }
             ForEach(SSHConnectionAddresses.read(listen: item.listen), id: \.self) { host in
-                Text("ssh -p \(item.port) \(item.account)@\(host)").font(.footnote.monospaced()).textSelection(.enabled)
+                Text("ssh -p \(item.port) \(item.account)@\(host)").font(.system(.footnote, design: .monospaced)).sshTextSelection()
             }
         }
     }
@@ -200,13 +215,13 @@ private struct SSHConnectionDetails: View {
 
     var body: some View {
         Group {
-            HStack { Text("Authentication"); Spacer(); Text("Key only").foregroundStyle(.secondary) }
-            HStack { Text("Authorized keys"); Spacer(); Text(authorizedKeys.map { $0 == 0 ? "None" : String($0) } ?? (readError == nil ? "Loading" : "Unavailable")).foregroundStyle(.secondary) }
-            if let readError { Text("Cannot read authorized_keys: " + readError).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
-            if authorizedKeys == 0 { Text("Add your client's public key to ~/Documents/.ssh/authorized_keys. Keep its private key on the client.").font(.footnote).foregroundStyle(.secondary) }
-            Text("Host key: " + fingerprint).font(.footnote.monospaced()).textSelection(.enabled)
+            HStack { Text("Authentication"); Spacer(); Text("Key only").foregroundColor(.secondary) }
+            HStack { Text("Authorized keys"); Spacer(); Text(authorizedKeys.map { $0 == 0 ? "None" : String($0) } ?? (readError == nil ? "Loading" : "Unavailable")).foregroundColor(.secondary) }
+            if let readError { Text("Cannot read authorized_keys: " + readError).font(.footnote).foregroundColor(.red).sshTextSelection() }
+            if authorizedKeys == 0 { Text("Add your client's public key to ~/Documents/.ssh/authorized_keys. Keep its private key on the client.").font(.footnote).foregroundColor(.secondary) }
+            Text("Host key: " + fingerprint).font(.system(.footnote, design: .monospaced)).sshTextSelection()
         }
-        .task {
+        .onAppear {
             let file = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(".ssh/authorized_keys")
             do {
                 let handle = try FileHandle(forReadingFrom: file)
