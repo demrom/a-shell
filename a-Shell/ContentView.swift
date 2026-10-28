@@ -97,6 +97,7 @@ struct SSHServiceDetails: View {
                     }
                 }
             }
+            .modifier(SSHSheetSizing())
             .navigationTitle("Remote access")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { presentationMode.wrappedValue.dismiss() } } }
@@ -105,8 +106,26 @@ struct SSHServiceDetails: View {
     }
 
     var body: some View {
-        if #available(iOS 16, *) { content.presentationDetents([.medium, .large]) }
+        if #available(iOS 18, *) { content }
+        else if #available(iOS 16, *) { content.presentationDetents([.medium, .large]) }
         else { content }
+    }
+}
+
+private struct SSHSheetSizing: ViewModifier {
+    @State private var height: CGFloat = 320
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+                } action: { _, measured in
+                    height = max(1, ceil(measured))
+                }
+                .presentationDetents([.height(height), .large])
+                .presentationDragIndicator(.visible)
+        } else { content }
     }
 }
 
