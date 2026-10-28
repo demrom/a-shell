@@ -104,17 +104,7 @@ struct ServiceIndicatorDots: View {
                     } icon: {
                         Circle().fill(item.color).frame(width: 8, height: 8)
                     }
-                    if let connectionDetails = item.connectionDetails {
-                        Text("Port: " + String(item.port))
-                        connectionDetails()
-                        ForEach(item.clients) { client in
-                            Text((client.user ?? item.account) + " · " + client.address).font(.footnote.monospaced())
-                            if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).textSelection(.enabled) }
-                        }
-                        ForEach(SSHConnectionAddresses.read(listen: item.listen), id: \.self) { host in
-                            Text("ssh -p \(item.port) \(item.account)@\(host)").font(.footnote.monospaced()).textSelection(.enabled)
-                        }
-                    }
+                    if item.connectionDetails != nil { SSHLegacyConnectionSummary(item: item) }
                     ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
                         Text(line).font(.subheadline).textSelection(.enabled)
                     }
@@ -138,6 +128,25 @@ struct ServiceIndicatorDots: View {
             content.presentationCompactAdaptation(.popover).presentationBackground(background)
         } else {
             content
+        }
+    }
+}
+
+private struct SSHLegacyConnectionSummary: View {
+    let item: ServiceIndicator
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Port: " + String(item.port))
+            if let connectionDetails = item.connectionDetails { connectionDetails() }
+            ForEach(item.clients) { client in
+                VStack(alignment: .leading) {
+                    Text((client.user ?? item.account) + " · " + client.address).font(.footnote.monospaced())
+                    if let name = client.keyName ?? client.keyFingerprint { Text(name).font(.footnote).textSelection(.enabled) }
+                }
+            }
+            ForEach(SSHConnectionAddresses.read(listen: item.listen), id: \.self) { host in
+                Text("ssh -p \(item.port) \(item.account)@\(host)").font(.footnote.monospaced()).textSelection(.enabled)
+            }
         }
     }
 }
@@ -521,7 +530,11 @@ struct ContentView: View {
                                 ToolbarItem(placement: .navigationBarLeading) {
                                     Button(action: {
                                         // reload wams.html at this position in history:
-                                        webview.webView.load(URLRequest(url: LocalServerPorts.wasmURL))
+                                        if appVersion != "a-Shell-mini" {
+                                            webview.webView.load(URLRequest(url: URL(string: "https://localhost:8443/wasm.html")!))
+                                        } else {
+                                            webview.webView.load(URLRequest(url: URL(string: "https://localhost:8334/wasm.html")!))
+                                        }
                                         localShowWebView = false
                                         showWebView = false
                                         showKeyboardAtStartup = true
