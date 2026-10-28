@@ -960,6 +960,7 @@ extension SceneDelegate {
                         terminalView?.updateDisplay()
                         commandBeforeCursor = ""
                         commandAfterCursor = ""
+                        synchronizeRecalledInputContext(source)
                         delayedVoiceOver(message: "empty line")
                     }
                 } else {
