@@ -685,7 +685,10 @@ struct ContentView: View {
         let items = items ?? services.items
         let active = items.contains { $0.clients.contains { $0.open } }
         let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
-        let image = UIImage(systemName: symbol)?.withConfiguration(UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label]))
+        var image = UIImage(systemName: symbol)
+        if #available(iOS 15, *) {
+            image = image?.withConfiguration(UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label]))
+        }
         let action = UIAction(title: "Remote access", image: image) { [weak scene] _ in
             guard let scene else { return }
             NotificationCenter.default.post(name: .init("remoteAccessShortcut"), object: scene)
