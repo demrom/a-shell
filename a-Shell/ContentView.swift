@@ -14,7 +14,6 @@ import Darwin
 
 struct ServiceIndicator: Identifiable {
     let id: String
-    let color: SwiftUI.Color
     let title: String
     let details: [String]
     var stop: (() -> Void)? = nil
@@ -60,50 +59,20 @@ final class ServiceIndicators: ObservableObject {
     }
 }
 
-struct ServiceIndicatorDots: View {
+struct SSHServiceDetails: View {
     let items: [ServiceIndicator]
     let background: SwiftUI.Color
     let foreground: SwiftUI.Color
     let accent: SwiftUI.Color
-    @State private var showingDetails = false
 
-    var body: some View {
-        Button {
-            showingDetails = true
-        } label: {
-            HStack(spacing: 8) {
-                ForEach(items) { item in
-                    Circle()
-                        .fill(item.color)
-                        .overlay(Circle().stroke(foreground.opacity(0.7), lineWidth: 0.5))
-                        .frame(width: 8, height: 8)
-                }
-            }
-            .padding(.horizontal, 12)
-            .frame(minWidth: 44, minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel("Running services")
-        .accessibilityValue(items.map(\.title).joined(separator: ", "))
-        .accessibilityIdentifier("service-indicators")
-        .popover(isPresented: $showingDetails) {
-            details
-        }
-        .onChange(of: items.map(\.id)) { ids in
-            if ids.isEmpty { showingDetails = false }
-        }
-    }
+    var body: some View { details }
 
     @ViewBuilder private var details: some View {
         let content = VStack(alignment: .leading, spacing: 16) {
+            if items.isEmpty { Text("SSH is off. Start it with sshd on.") }
             ForEach(items) { item in
                 VStack(alignment: .leading, spacing: 6) {
-                    Label {
-                        Text(item.title).font(.headline)
-                    } icon: {
-                        Circle().fill(item.color).frame(width: 8, height: 8)
-                    }
+                    Text(item.title).font(.headline)
                     if item.connectionDetails != nil { SSHLegacyConnectionSummary(item: item) }
                     ForEach(Array(item.details.enumerated()), id: \.offset) { _, line in
                         Text(line).font(.subheadline).textSelection(.enabled)
@@ -180,7 +149,7 @@ public func sshdState(_ running: Int32, _ port: Int32, _ listen: UnsafePointer<C
             command: commands?[index].map { String(cString: $0) }, user: users?[index].map { String(cString: $0) }, keyName: keyNames?[index].map { String(cString: $0) }, keyFingerprint: keyFingerprints?[index].map { String(cString: $0) }, activity: Int(kinds?[index] ?? 0)))
     }
     let key = fingerprint.map { String(cString: $0) } ?? "unavailable"
-    let item = ServiceIndicator(id: "ssh", color: clients.isEmpty ? .yellow : .green, title: "SSH", details: [], stop: { stop?() }, port: Int(port), listen: listen.map { String(cString: $0) }, fingerprint: key, activeClientCount: clients.count, clients: clients, account: account.map { String(cString: $0) } ?? "mobile", connectionDetails: { AnyView(SSHConnectionDetails(fingerprint: key)) })
+    let item = ServiceIndicator(id: "ssh", title: "SSH", details: [], stop: { stop?() }, port: Int(port), listen: listen.map { String(cString: $0) }, fingerprint: key, activeClientCount: clients.count, clients: clients, account: account.map { String(cString: $0) } ?? "mobile", connectionDetails: { AnyView(SSHConnectionDetails(fingerprint: key)) })
     DispatchQueue.main.async {
         if ServiceIndicators.shared.controlError?.hasPrefix("sshd:") == true { ServiceIndicators.shared.controlError = nil }
     }
@@ -464,6 +433,8 @@ private let edgeSwipeTarget = EdgeSwipeTarget()
 
 struct ContentView: View {
     @ObservedObject private var services = ServiceIndicators.shared
+    @State private var showingRemoteAccess = false
+    @State private var restoresRemoteKeyboard = false
     @State private var serviceBackground = UIColor.systemBackground
     @State private var serviceForeground = UIColor.label
     @State private var serviceAccent = UIColor.link
@@ -694,20 +665,48 @@ struct ContentView: View {
         .if(!(localShowWebView && showWebView)) {
             $0.ignoresSafeArea(.keyboard, edges: .bottom)
         }
-        .safeAreaInset(edge: .top, spacing: 0) {
-            if !services.items.isEmpty {
-                HStack {
-                    Spacer()
-                    ServiceIndicatorDots(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent))
-                }
-                .padding(.trailing, 4)
-                .background(Color(uiColor: serviceBackground))
-            }
+        .sheet(isPresented: $showingRemoteAccess, onDismiss: {
+            if restoresRemoteKeyboard { terminalview.view.becomeFirstResponder() }
+            restoresRemoteKeyboard = false
+        }) {
+            SSHServiceDetails(items: services.items, background: Color(uiColor: serviceBackground), foreground: Color(uiColor: serviceForeground), accent: Color(uiColor: serviceAccent))
         }
-        .onAppear { updateServiceTheme() }
+        .onReceive(NotificationCenter.default.publisher(for: .init("remoteAccessShortcut"))) { note in
+            guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
+            showRemoteAccess()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .init("phoneToolbarRequestsRemoteAccess"))) { note in
+            guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
+            registerRemoteToolbarItem()
+        }
+        .onReceive(services.$items) { items in registerRemoteToolbarItem(items: items) }
+        .onAppear { updateServiceTheme(); registerRemoteToolbarItem() }
         .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
             updateServiceTheme()
         }
+    }
+
+    private func showRemoteAccess() {
+        restoresRemoteKeyboard = terminalview.view.isFirstResponder
+        terminalview.view.resignFirstResponder()
+        showingRemoteAccess = true
+    }
+
+    private func registerRemoteToolbarItem(items: [ServiceIndicator]? = nil) {
+        guard let scene = terminalview.view.terminalDelegate as? SceneDelegate else { return }
+        let items = items ?? services.items
+        let active = items.contains { $0.clients.contains { $0.open } }
+        let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
+        let image = UIImage(systemName: symbol)?.withConfiguration(UIImage.SymbolConfiguration(paletteColors: [.label, active ? .systemBlue : .label]))
+        let action = UIAction(title: "Remote access", image: image) { [weak scene] _ in
+            guard let scene else { return }
+            NotificationCenter.default.post(name: .init("remoteAccessShortcut"), object: scene)
+        }
+        let item = UIBarButtonItem(primaryAction: action)
+        item.accessibilityLabel = "Remote access"
+        item.accessibilityIdentifier = "remote-access-key"
+        item.accessibilityValue = items.isEmpty ? "Off" : (active ? "SSH on, in use" : "SSH on")
+        NotificationCenter.default.post(name: .init("phoneToolbarRegisterRemoteAccess"), object: scene, userInfo: ["item": item])
     }
 
     private func updateServiceTheme() {
