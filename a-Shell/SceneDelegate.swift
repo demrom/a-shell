@@ -917,7 +917,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                 self.terminalView?.feed(text: self.commandAfterCursor)
                 self.terminalView?.restoreCursorPosition()
             }
-    }
+        }
     }
 
     @objc func hideKeyboard() {
