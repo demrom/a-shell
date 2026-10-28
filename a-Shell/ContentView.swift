@@ -521,6 +521,7 @@ private struct ServiceDetailsForm: View {
                 }
             }
             .serviceCompactSections()
+            .modifier(RemoteAccessSheetSizing())
             .listStyle(.insetGrouped)
             .scrollContentBackground(.visible)
             .confirmationDialog("Stop " + (stoppingService?.title ?? "service") + "?", isPresented: Binding(get: { stoppingService != nil }, set: { if !$0 { stoppingService = nil } }), titleVisibility: .visible) {
@@ -839,13 +840,31 @@ private extension View {
 }
 
 
+private struct RemoteAccessSheetSizing: ViewModifier {
+    @State private var height: CGFloat = 320
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18, *) {
+            content
+                .onScrollGeometryChange(for: CGFloat.self) { geometry in
+                    geometry.contentSize.height + geometry.contentInsets.top + geometry.contentInsets.bottom
+                } action: { _, measured in
+                    height = max(1, ceil(measured))
+                }
+                .presentationDetents([.height(height), .large])
+                .presentationDragIndicator(.visible)
+        } else { content }
+    }
+}
+
 private func setRemoteService(_ kind: ServiceStatus.Kind, enabled: Bool, terminal: TerminalView) {
     (terminal.terminalDelegate as? SceneDelegate)?.setRemoteService(kind.rawValue, enabled: enabled)
 }
 
 private extension View {
     @ViewBuilder func remoteAccessDetents() -> some View {
-        if #available(iOS 16, *) { presentationDetents([.medium, .large]).presentationDragIndicator(.visible) }
+        if #available(iOS 18, *) { self }
+        else if #available(iOS 16, *) { presentationDetents([.medium, .large]).presentationDragIndicator(.visible) }
         else { self }
     }
 }
