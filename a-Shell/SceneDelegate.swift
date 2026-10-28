@@ -4449,7 +4449,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
         }
         terminalView?.installColors(terminalTheme?.colors.dropFirst(3).map { UIColor(hexString: $0).toSwiftTermColor() } ?? SwiftTerm.Color.defaultInstalledColors)
         setEnvironmentFGBG(foregroundColor: foregroundColor, backgroundColor: backgroundColor)
-        if (showKeyboardAtStartup) {
+        if showKeyboardAtStartup, window?.rootViewController?.presentedViewController == nil {
             if let termView = self.terminalView {
                 if !termView.isFirstResponder {
                     _ = termView.becomeFirstResponder()
