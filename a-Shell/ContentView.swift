@@ -1344,16 +1344,17 @@ struct ContentView: View {
             guard note.object as AnyObject? === terminalview.view.terminalDelegate as AnyObject? else { return }
             registerRemoteToolbarItem()
         }
-        .onReceive(services.$items) { _ in registerRemoteToolbarItem() }
+        .onReceive(services.$items) { items in registerRemoteToolbarItem(items: items) }
         .onReceive(NotificationCenter.default.publisher(for: .init("terminalThemeChanged"), object: terminalview.view)) { _ in
             updateServiceTheme()
         }
     }
 
-    private func registerRemoteToolbarItem() {
+    private func registerRemoteToolbarItem(items: [ServiceStatus]? = nil) {
         guard let scene = terminalview.view.terminalDelegate as? SceneDelegate else { return }
-        let active = services.items.contains { !$0.clients.isEmpty }
-        let symbol = services.items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
+        let items = items ?? services.items
+        let active = items.contains { $0.clients.contains { $0.open } }
+        let symbol = items.isEmpty ? "antenna.radiowaves.left.and.right.slash" : "antenna.radiowaves.left.and.right"
         let configuration = UIImage.SymbolConfiguration(paletteColors: [.label, active ? serviceAccent : .label])
         let image = UIImage(systemName: symbol)?.withConfiguration(configuration)
         let action = UIAction(title: "Remote access", image: image) { _ in
@@ -1366,7 +1367,7 @@ struct ContentView: View {
         let item = UIBarButtonItem(primaryAction: action)
         item.accessibilityLabel = "Remote access"
         item.accessibilityIdentifier = "remote-access-key"
-        item.accessibilityValue = services.items.isEmpty ? "Off" : services.items.map { $0.title + ($0.clients.isEmpty ? " on" : " on, in use") }.joined(separator: ", ")
+        item.accessibilityValue = items.isEmpty ? "Off" : items.map { $0.title + ($0.clients.contains { $0.open } ? " on, in use" : " on") }.joined(separator: ", ")
         // Optional phone-toolbar registration; Relay remains independent when it is absent.
         NotificationCenter.default.post(name: .init("phoneToolbarRegisterRemoteAccess"), object: scene, userInfo: ["item": item])
     }
