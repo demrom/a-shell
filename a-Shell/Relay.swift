@@ -315,6 +315,7 @@ final class LocalHTTPServer {
     func start(parameters: NWParameters, ready: @escaping (Swift.Result<UInt16, Error>) -> Void) throws {
         let listener = try NWListener(using: parameters)
         self.listener = listener
+        var failed = false
         listener.stateUpdateHandler = { [weak self, weak listener] state in
             guard let self, let listener else { return }
             switch state {
@@ -322,8 +323,11 @@ final class LocalHTTPServer {
                 guard let port = listener.port else { return }
                 self.stateChanged?(0)
                 ready(.success(port.rawValue))
-            case .failed(let error): listener.cancel(); self.stateChanged?(nil); ready(.failure(error))
-            case .cancelled: self.stateChanged?(nil)
+            case .failed(let error): failed = true; listener.cancel(); self.stateChanged?(nil); ready(.failure(error))
+            case .cancelled:
+                self.stateChanged?(nil)
+                // stop() clears self.listener before cancelling; a cancel with it still set came from the system.
+                if !failed, self.listener === listener { failed = true; ready(.failure(RelayConfiguration.failure("listener cancelled by the system"))) }
             default: break
             }
         }
@@ -850,11 +854,14 @@ final class Relay: ObservableObject {
             resultLock.lock()
             if result == nil { result = value; ready.signal() }
             resultLock.unlock()
-            if case .failure = value {
+            if case .failure(let error) = value {
                 self.queue.async {
                     if self.server === server {
                         self.stop()
-                        self.state = "stopped (listener failed; run relay on to retry)"
+                        self.state = Self.failedState
+                        self.logEvent("listener ended: \(error)")
+                        // iOS fails the listener of a backgrounded app; the process lives on, so bring the relay back by itself.
+                        self.scheduleRestart(configuration, attempt: 1)
                     }
                 }
             }
@@ -876,6 +883,31 @@ final class Relay: ObservableObject {
         commandConfiguration = effective
         commandLock.unlock()
         state = "listening on \(configuration.bind):\(port), mTLS \(configuration.mutualTLS ? "on" : "off")"
+    }
+
+    // Kept in Documents so a later session can read which state iOS put the listener in.
+    private func logEvent(_ text: String) {
+        let file = directory.appendingPathComponent(".relay-events.log")
+        let line = "\(ISO8601DateFormatter().string(from: Date())) \(text)\n"
+        if let handle = try? FileHandle(forWritingTo: file) {
+            handle.seekToEndOfFile()
+            handle.write(Data(line.utf8))
+            try? handle.close()
+        } else { try? line.write(to: file, atomically: true, encoding: .utf8) }
+    }
+
+    private static let failedState = "stopped (listener failed; restarting)"
+
+    private func scheduleRestart(_ configuration: RelayConfiguration, attempt: Int) {
+        queue.asyncAfter(deadline: .now() + .seconds(min(attempt, 10))) {
+            // "relay off", "relay on" or a newer start changes state or sets server: that owns the relay now.
+            guard self.server == nil, self.state == Self.failedState else { return }
+            do { try self.start(configuration); self.logEvent("restarted after \(attempt) attempt(s)") }
+            catch {
+                self.state = Self.failedState
+                self.scheduleRestart(configuration, attempt: attempt + 1)
+            }
+        }
     }
 
     private func stop() {
