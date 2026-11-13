@@ -234,6 +234,13 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
             viewBehavior = .ignoreSafeArea
         }
         initializeEnvironment()
+        // The first ios_system call creates the default session with the process cwd as its
+        // currentDir. Started from "/", every later switch to that session (the .profile run)
+        // chdirs the whole app to "/", and each file command then hangs in a coordinated write
+        // on "/" (task-5xzpr). Enter Documents first.
+        if let documents = try? FileManager().url(for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true) {
+            FileManager().changeCurrentDirectoryPath(documents.path)
+        }
         ios_system("alias sh dash")
         replaceCommand("progress", "ashell_progress", false)
         replaceCommand("background", "ashell_background", true)

@@ -4906,7 +4906,9 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
             if let currentDirectoryData = userInfo["cwd"] {
                 if var currentDirectory = currentDirectoryData as? String {
                     NSLog("got currentDirectory as \(currentDirectory)")
-                    if (!FileManager().fileExists(atPath: currentDirectory) || !FileManager().isReadableFile(atPath: currentDirectory)) {
+                    // Builds that started the default session in "/" saved "/" here, and each file
+                    // command then hung in a coordinated write on "/" (task-5xzpr): never restore it.
+                    if (!FileManager().fileExists(atPath: currentDirectory) || !FileManager().isReadableFile(atPath: currentDirectory) || currentDirectory == "/") {
                         // The directory does not exist anymore (often home directory, changes after reinstall)
                         do {
                             currentDirectory = try FileManager().url(for: .documentDirectory,
