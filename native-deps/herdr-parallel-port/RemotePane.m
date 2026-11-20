@@ -1,5 +1,6 @@
 #import "PaneWire.h"
 #import "HostPane.h"
+#import "ios_system/ios_system.h"
 #include "herdr_pane.h"
 #include <errno.h>
 #include <dirent.h>
@@ -175,6 +176,7 @@ int herdr_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, uns
             bookmarkDataWithOptions:0 includingResourceValuesForKeys:nil relativeToURL:nil error:&bookmarkFailure] : nil;
         if (!cwdBookmark || !homeBookmark || !documentsBookmark) {
             NSLog(@"Herdr pane directory bookmark failed: %@", bookmarkFailure);
+            if (thread_stderr) fprintf(thread_stderr, "herdr worker bookmark failed: %s %ld: %s\n", bookmarkFailure.domain.UTF8String, (long)bookmarkFailure.code, bookmarkFailure.localizedDescription.UTF8String);
             return [bookmarkFailure.domain isEqualToString:NSPOSIXErrorDomain] ? (int)bookmarkFailure.code : EIO;
         }
         // A real create/read/unlink in this host-owned disposable directory proves
@@ -182,18 +184,21 @@ int herdr_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, uns
         NSString *template = [documentsURL.path stringByAppendingPathComponent:@".herdr-pane-access.XXXXXX"];
         char *probe = strdup(template.fileSystemRepresentation);
         if (!probe) return ENOMEM;
-        if (!mkdtemp(probe)) { int code = errno; free(probe); return code; }
+        if (!mkdtemp(probe)) { int code = errno; if (thread_stderr) fprintf(thread_stderr, "herdr worker probe %s: %s\n", probe, strerror(code)); free(probe); return code; }
         pane.probeDirectory = [[NSFileManager defaultManager] stringWithFileSystemRepresentation:probe length:strlen(probe)];
         free(probe);
         NSTimeInterval started = NSProcessInfo.processInfo.systemUptime;
         dispatch_semaphore_t ready = dispatch_semaphore_create(0);
         __block int error = 0;
+        FILE *stderr_stream = thread_stderr;
         herdr_extension_connect(^(NSXPCConnection *connection, NSError *failure) {
             pane.connection = connection;
             // ExtensionFoundation and Cocoa error numbers are not POSIX errno.
             // In particular, framework code 1 must not masquerade as EPERM.
             error = failure ? ([failure.domain isEqualToString:NSPOSIXErrorDomain] ? (int)failure.code : EIO) : 0;
             if (failure) NSLog(@"Herdr extension launch failed: %@", failure);
+            // The caller prints only strerror; keep the framework error visible on the command's stderr.
+            if (failure && stderr_stream) fprintf(stderr_stream, "herdr worker launch failed: %s %ld: %s\n", failure.domain.UTF8String, (long)failure.code, failure.localizedDescription.UTF8String);
             dispatch_semaphore_signal(ready);
         });
         dispatch_semaphore_wait(ready, DISPATCH_TIME_FOREVER);
@@ -226,6 +231,7 @@ int herdr_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, uns
                 if (error && fd >= 0) { close(fd); fd = -1; }
             }
             NSLog(@"Herdr extension spawn: real_pid=%d error=%d startup_ms=%.3f", pid, error, (NSProcessInfo.processInfo.systemUptime - started) * 1000);
+            if (code && stderr_stream) fprintf(stderr_stream, "herdr worker %d refused spawn: %s\n", pid, strerror(code));
         }];
         if (rmdir(pane.probeDirectory.fileSystemRepresentation) == 0) pane.probeDirectory = nil;
         if (!error && fd < 0) error = EPROTO;
