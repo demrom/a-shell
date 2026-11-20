@@ -229,5 +229,13 @@
     "path": "/Users/demrom/o/build/codex-0.160-ios-locks/codex.framework",
     "sha256": "e7630e0c548bf9e56585c594d8ae44439f712bc0fcb7544b74fe0382313fd9be",
     "commands": []
+  },
+  {
+    "name": "heliocron",
+    "path": "/Users/demrom/o/build/task-vi96p/frameworks/heliocron.framework",
+    "sha256": "8332495270c511d8154cde0d46becaaeb7ea404b27483d5bd2b07ef3d740d26c",
+    "commands": [
+      "heliocron"
+    ]
   }
 ]

@@ -9,6 +9,13 @@
 		<string></string>
 		<string>file</string>
 	</array>
+	<key>heliocron</key>
+	<array>
+		<string>heliocron.framework/heliocron</string>
+		<string>heliocron_ios_main</string>
+		<string></string>
+		<string>file</string>
+	</array>
 	<key>ruff</key>
 	<array>
 		<string>Ruff.framework/Ruff</string>
