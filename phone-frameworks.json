@@ -14,9 +14,10 @@
   },
   {
     "name": "files",
-    "path": "files.framework",
-    "sha256": "a2e14eefa28bde8b5d3dc4057598b826b061e7f2b7c55defe66683db3dbe6225",
-    "commands": []
+    "path": "/Users/demrom/o/build/phone-inputs/files-base64-19e077c/files.framework",
+    "sha256": "df42b5ac8caca0724838fadad08a3ab3c31c3d9d67daf8562199dc424dcccc20",
+    "commands": [],
+    "source": "ios_system 5e23b1d with the base64 filter and libresolv linkage from holzschu/ios_system candidate 19e077c; iPhoneOS arm64 files scheme built with the shared phone/build.py xcode command and signed in the device-tested d6fcdfc6a a-Shell composition"
   },
   {
     "name": "dash",
