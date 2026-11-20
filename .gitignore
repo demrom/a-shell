@@ -95,3 +95,4 @@ Resources/node-fetch/
 
 # Local private phone integration inputs
 .phone-cache/
+/zoxide/zoxide.xcframework/

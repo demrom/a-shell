@@ -237,5 +237,15 @@
     "commands": [
       "heliocron"
     ]
+  },
+  {
+    "name": "zoxide",
+    "path": "/Users/demrom/o/build/task-vi96p/frameworks/zoxide.framework",
+    "sha256": "8163ac69e9524f45f8b14b6981b5ccb625ec38156961a36fdc41be273f67fc4e",
+    "commands": [
+      "zoxide",
+      "z",
+      "zi"
+    ]
   }
 ]

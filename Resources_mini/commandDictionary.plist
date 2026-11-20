@@ -9,6 +9,27 @@
 		<string></string>
 		<string>file</string>
 	</array>
+	<key>zoxide</key>
+	<array>
+		<string>zoxide.framework/zoxide</string>
+		<string>zoxide_ios_main</string>
+		<string></string>
+		<string>directory</string>
+	</array>
+	<key>z</key>
+	<array>
+		<string>zoxide.framework/zoxide</string>
+		<string>zoxide_z_main</string>
+		<string></string>
+		<string>directory</string>
+	</array>
+	<key>zi</key>
+	<array>
+		<string>zoxide.framework/zoxide</string>
+		<string>zoxide_zi_main</string>
+		<string></string>
+		<string>directory</string>
+	</array>
 	<key>heliocron</key>
 	<array>
 		<string>heliocron.framework/heliocron</string>
