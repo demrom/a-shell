@@ -6,6 +6,10 @@
 	<string>The location command returns your position to your script. Optional background mode keeps its location session active for long scripts while the app is off screen. The app does not retain or send location samples.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>
 	<string>The location command returns your position to your script. Optional background mode keeps its location session active for long scripts while the app is off screen. The app does not retain or send location samples.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Authorize access to protected passwords and changes to their access policy.</string>
+	<key>CredentialPrivateAccessGroup</key>
+	<string>$(AppIdentifierPrefix)$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>AppGroupIdentifier</key>
 	<string>group.$(APP_GROUP_PREFIX:default=AsheKube).a-Shell</string>
 	<key>WasmServerPort</key>

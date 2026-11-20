@@ -249,6 +249,7 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         ios_setBookmarkDictionaryName("bookmarkNames")
         replaceCommand("relay", "relay_main", true)
         replaceCommand("agents", "ashell_agents", true)
+        replaceCommand("keychain", "keychain_main", true)
         replaceCommand("history", "history", true)
         #if HERDR_EMBEDDED
         replaceCommand("herdr", "herdr_ios_main", false)

@@ -28,6 +28,7 @@ touch Resources_mini/bin/healthkit
 touch Resources_mini/bin/host
 touch Resources_mini/bin/ifconfig
 touch Resources_mini/bin/jsc
+touch Resources_mini/bin/keychain
 touch Resources_mini/bin/link
 touch Resources_mini/bin/ln
 touch Resources_mini/bin/location
