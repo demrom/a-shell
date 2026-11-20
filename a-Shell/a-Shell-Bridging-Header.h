@@ -7,3 +7,6 @@
 // Existing ios_system status setter; pthread cancellation skips a command return.
 void set_session_errno(int status);
 #import "../native-deps/herdr-parallel-port/PaneWire.h"
+
+#import "../ml/AShellML.h"
+#import "../ml/AShellMLInstall.h"
