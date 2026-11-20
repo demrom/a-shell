@@ -1,9 +1,10 @@
 [
   {
     "name": "ios_system",
-    "path": "ios_system.framework",
-    "sha256": "5158731b4fd50178bb927b1df8c02924b4f1c6a2099d3cc2b8f8745f8907a0da",
-    "commands": []
+    "path": "/Users/demrom/o/build/phone-inputs/ios_system-5e23b1d/ios_system.framework",
+    "sha256": "8e784d1c663bfb6661b394419928fcfc4778ea39d68cd166460f49e9d25049c7",
+    "commands": [],
+    "source": "ios_system 5e23b1d on /Users/demrom/o/ios_system branch phone/task-vi96p-root-guard: a7869dc + 58e31aa root guard (as 174c78b) + tests/worker-root-dispatch.m; built with build.py xcode -- -project ios_system.xcodeproj -scheme ios_system -configuration Release -sdk iphoneos -destination generic/platform=iOS CODE_SIGNING_ALLOWED=NO IPHONEOS_DEPLOYMENT_TARGET=16.0 build; replaces 5158731b (phone-inputs/git-less510, source unrecorded, same 208 exports)"
   },
   {
     "name": "text",
