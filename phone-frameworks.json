@@ -223,5 +223,11 @@
     "commands": [
       "unrar"
     ]
+  },
+  {
+    "name": "codex",
+    "path": "/Users/demrom/o/build/codex-0.160-ios-locks/codex.framework",
+    "sha256": "e7630e0c548bf9e56585c594d8ae44439f712bc0fcb7544b74fe0382313fd9be",
+    "commands": []
   }
 ]
