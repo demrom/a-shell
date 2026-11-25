@@ -74,7 +74,7 @@ index 65b6e3f..2ef60ae 100644
 +    const int signals[] = {SIGHUP, SIGTERM, SIGTSTP, SIGWINCH};
 +    struct sigaction *previous = context;
 +    for(int i = 0; i < 4; i++)
-+      sigaction(signals[i], &previous[i], NULL);
++      sigaction(signals[i], &(struct sigaction){ .sa_handler = SIG_IGN }, &previous[i]);
 +    ios_stopInteractive();
 +}
 +#endif

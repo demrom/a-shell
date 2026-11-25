@@ -155,7 +155,7 @@
 +		else if (!ios_interrupted)
 +			c = rsync_socket(&opts, cleanup.fd, fargs);
 +		pthread_cleanup_pop(1);
-+		if (ios_interrupted) ios_exit(130);
++		if (ios_interrupted) ios_exit(1);
 +		pthread_setcancelstate(cancel_state, NULL);
 +		exit(c);
 +#else
@@ -234,7 +234,7 @@
 +	pthread_cleanup_pop(1);
 +	if (ios_interrupted) {
 +		fargs_free(fargs);
-+		ios_exit(130);
++		ios_exit(1);
 +	}
 +	pthread_setcancelstate(cancel_state, NULL);
 +#else
