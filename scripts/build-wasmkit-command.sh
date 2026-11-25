@@ -70,6 +70,19 @@ tar -xzf "$downloads/WasmKitCommand-$wrapper.tar.gz" --strip-components 1 -C "$s
 tar -xzf "$downloads/WasmKit-$engine.tar.gz" --strip-components 1 -C "$source/WasmKit"
 unzip -q "$downloads/ios_system-v3.0.6.xcframework.zip" -d "$source"
 
+# Negative control: regress guest stdout routing without changing the smoke test.
+patch -d "$source" -p1 <<'PATCH'
+--- a/WasmKitCommand.swift
++++ b/WasmKitCommand.swift
+@@ -126,5 +126,5 @@
+                                             environment: environment,
+                                             fileSystem: .host().withStdio(stdin:  fileno(thread_stdin),
+-                                                                          stdout:  fileno(thread_stdout),
++                                                                          stdout:  fileno(thread_stderr),
+                                                                           stderr:  fileno(thread_stderr))
+                                                 // Stdio is already mapped above. The extension sandbox denies
+PATCH
+
 name=WasmKitCommand
 for sdk in iphoneos iphonesimulator; do
   case $sdk in
