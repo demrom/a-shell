@@ -5,6 +5,7 @@ sim=${1:?Pass a Simulator UDID}
 bundle=${2:?Pass the app bundle identifier}
 mode=${3:?Pass commands, bundled-font, photos, or wasm}
 input=${4:?Pass the font, JPEG, or compiled wasm-output.wasm fixture}
+video=${5:-}
 root=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 container=$(xcrun simctl get_app_container "$sim" "$bundle" data)
 documents="$container/Documents"
@@ -80,6 +81,10 @@ wait_for_streams() {
 }
 if [[ $mode == photos ]]; then
     xcrun simctl addmedia "$sim" "$input"
+    if [[ -n $video ]]; then
+        command -v ffprobe >/dev/null
+        xcrun simctl addmedia "$sim" "$video"
+    fi
     xcrun simctl privacy "$sim" grant photos "$bundle"
     # TCC can stop the old app while changing its grant. Track the new writer.
     pin_stream_writer
@@ -114,8 +119,21 @@ if [[ $mode == photos ]]; then
         printf 'The imported JPEG is missing from the original-byte cache\n' >&2
         exit 1
     fi
+    if [[ -n $video ]]; then
+        if ! grep -Eq '^PHOTOS_GREEN originals=[1-9][0-9]* video_checked=1$' "$work/photos-success.txt"; then
+            printf 'Photos did not produce a playable cached video\n' >&2
+            cat "$work/photos-success.txt" >&2
+            exit 1
+        fi
+        cached_video=$(find "$documents/Photos" -type f -exec cmp -s "$video" {} \; -print -quit)
+        if [[ -z $cached_video ]]; then
+            printf 'The imported MP4 is missing from the original-byte cache\n' >&2
+            exit 1
+        fi
+    fi
     sync_photos photos-root-repeat.txt photos-repeat.err
     cmp "$input" "$cached"
+    if [[ -n $video ]]; then cmp "$video" "$cached_video"; fi
     snapshot_index after
     diff -u "$work/before-index.json" "$work/after-index.json"
     (cd "$work" && HOME="$container" sh "$root/photos.sh" after)

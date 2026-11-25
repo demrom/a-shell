@@ -135,10 +135,13 @@ jobs:
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
         shell: bash
         run: |
+          command -v ffprobe >/dev/null || brew install ffmpeg
           jpeg="$RUNNER_TEMP/PhotosCacheFixture.jpg"
+          video="$RUNNER_TEMP/PhotosCacheFixture.mp4"
           /usr/bin/base64 -D -i tests/fixtures/photos-cache.jpg.base64 -o "$jpeg"
+          /usr/bin/base64 -D -i tests/fixtures/photos-cache.mp4.base64 -o "$video"
           app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
-          bash tests/simulator-app.sh "$app" tests/simulator-app-commands.sh photos "$jpeg"
+          bash tests/simulator-app.sh "$app" tests/simulator-app-commands.sh photos "$jpeg" "$video"
       - name: Check exact WebView WASM stream redirection
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
         shell: bash
