@@ -1,0 +1,36 @@
+name: WasmKitCommand framework
+on:
+  pull_request:
+    paths:
+      - 'scripts/build-wasmkit-command.sh'
+      - 'tests/wasmkit/**'
+      - '.github/workflows/wasmkit-command.yml'
+  push:
+    paths:
+      - 'scripts/build-wasmkit-command.sh'
+      - 'tests/wasmkit/**'
+      - '.github/workflows/wasmkit-command.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 35
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and run wasmkit on Simulator
+        run: bash scripts/build-wasmkit-command.sh --smoke
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: WasmKitCommand
+          include-hidden-files: true
+          if-no-files-found: error
+          path: .build/wasmkit-command/dist/
