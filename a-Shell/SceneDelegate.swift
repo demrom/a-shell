@@ -5496,12 +5496,12 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
     
     
     func scene(_ scene: UIScene, openURLContexts: Set<UIOpenURLContext>) {
-        NSLog("Calling openURLContexts with %@", String(describing: openURLContexts))
+        NSLog("Calling openURLContexts with \(openURLContexts)")
         for urlContext in openURLContexts {
             // Is it one of our URLs?
             let fileURL = urlContext.url
             if ((fileURL.scheme ?? "").hasPrefix("ashell")) {
-                NSLog("We received an URL in openURLContexts: %@", String(describing: fileURL.absoluteString.removingPercentEncoding)) // received "ashell://ls"
+                NSLog("We received an URL in openURLContexts: \(fileURL.absoluteString.removingPercentEncoding)") // received "ashell://ls"
                 if (UIDevice.current.model.hasPrefix("iPad")) {
                     // iPad, so always open a new window to execute the command
                     let activity = NSUserActivity(activityType: "AsheKube.app.a-Shell.ExecuteCommand")

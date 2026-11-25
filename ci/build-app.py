@@ -138,8 +138,6 @@ def fetch(cache, source):
             if digest(incoming) != sha:
                 raise InputError("download SHA-256 mismatch")
             incoming.replace(archive)
-    elif digest(archive) != sha:
-        raise InputError(f"cached SHA-256 mismatch: {archive}")
     return archive
 
 

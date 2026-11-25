@@ -3007,7 +3007,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2200010030F7400000000004 /* PhotosUI.framework in Frameworks */,
 				224A904D2ADD0999006DB9CC /* ios_system.xcframework in Frameworks */,
 				2225C1122F685BDD0013F533 /* NIOSSL in Frameworks */,
 				227A13642F308E9C006FD5C1 /* SwiftTerm in Frameworks */,
@@ -3018,7 +3017,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2200010030F7400000000001 /* PhotosUI.framework in Frameworks */,
 				228E13F825C95F4C0065D825 /* ios_system.xcframework in Frameworks */,
 				2225C1102F685BD50013F533 /* NIOSSL in Frameworks */,
 				227EE36E2F0913C000636757 /* SwiftTerm in Frameworks */,
@@ -3029,7 +3027,6 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				2200010030F7400000000002 /* PhotosUI.framework in Frameworks */,
 				228E13F625C95F400065D825 /* ios_system.xcframework in Frameworks */,
 				2225C10E2F685BCB0013F533 /* NIOSSL in Frameworks */,
 				2213EE132EE4A148001F0114 /* SwiftTerm in Frameworks */,

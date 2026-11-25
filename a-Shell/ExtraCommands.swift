@@ -1306,7 +1306,7 @@ public func downloadFile(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePo
         return 0
     }
     var paths = Array(args.dropFirst())
-    var waitForDownload = false
+    var waitForDownload = true
     while let option = paths.first {
         if option == "--" { paths.removeFirst(); break }
         if option == "-w" || option == "--wait" {
@@ -1486,7 +1486,7 @@ private func removePhotoCacheItem(_ url: URL) throws {
 @_cdecl("photos_main")
 public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>?) -> Int32 {
     guard let args = convertCArguments(argc: argc, argv: argv) else { return 1 }
-    let usage = "photos: sync accessible Photos originals to ~/Documents/Photos and print its path.\nUsage: photos [--select | --help]\n--select: change the limited Photos selection, then sync.\nRequests system Photos access (full or limited). Includes Live Photo video and RAW originals.\nFiles are read-only copies, reused on later syncs; edits do not change Photos.\nA sync removes cached assets no longer accessible. Copies made elsewhere remain.\niCloud resources may download; each resource has a 5-minute timeout.\n"
+    let usage = "photos: sync accessible Photos originals to ~/Documents/Photos and print its path.\nUsage: photos [--help]\nRequests system Photos access (full or limited). Includes Live Photo video and RAW originals.\nFiles are read-only copies, reused on later syncs; edits do not change Photos.\nA sync removes cached assets no longer accessible. Copies made elsewhere remain.\niCloud resources may download; each resource has a 5-minute timeout.\n"
     if args.count == 2 && (args[1] == "--help" || args[1] == "-h") {
         fputs(usage, thread_stdout)
         return 0
