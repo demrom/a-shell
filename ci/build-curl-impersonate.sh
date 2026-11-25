@@ -55,7 +55,7 @@ build_slice() {
   target="$arch-apple-ios$minos$suffix"
   flags="-target $target -fPIC"
   runtime="$out/ios_system.xcframework/$identifier/ios_system.framework/ios_system"
-  xcrun lipo -verify_arch "$arch" "$runtime"
+  xcrun lipo "$runtime" -verify_arch "$arch"
 
   cmake -S "$sources" -B "$build" -G Ninja \
     -DCMAKE_SYSTEM_NAME=iOS -DCMAKE_SYSTEM_PROCESSOR="$arch" \
