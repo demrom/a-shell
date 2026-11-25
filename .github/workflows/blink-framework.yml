@@ -4,6 +4,7 @@ on:
     paths:
       - 'ci/blink*'
       - 'ci/audit-artifact.py'
+      - 'ci/test-universal-audit.sh'
       - '.github/workflows/blink-framework.yml'
   workflow_dispatch:
   push:
@@ -31,6 +32,7 @@ jobs:
         run: |
           xcodebuild -version
           bash ci/blink-frameworks.sh
+          bash ci/test-universal-audit.sh .build/blink.xcframework.zip
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: blink-xcframework
