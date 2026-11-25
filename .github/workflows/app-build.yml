@@ -41,7 +41,7 @@ jobs:
   build:
     name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: ${{ inputs.runner || 'macos-26-intel' }}
-    timeout-minutes: 60
+    timeout-minutes: ${{ matrix.platform == 'simulator' && matrix.scheme == 'a-Shell-noPython' && 90 || 60 }}
     strategy:
       fail-fast: false
       matrix:
@@ -59,6 +59,7 @@ jobs:
       - name: Check toolchain and SwiftPM manifest
         run: |
           xcodebuild -version
+          xcodebuild -version | grep -Fx 'Xcode 26.6'
           uv run ci/build-app.py package --check
       - name: Build unsigned app from pinned frameworks
         id: app-build
@@ -83,8 +84,21 @@ jobs:
           binary="$app/$SCHEME"
           if [[ -f "$binary.debug.dylib" ]]; then binary="$binary.debug.dylib"; fi
           sh tests/photos-link.sh "$binary"
-      - name: Exercise command URL logging on Simulator
+      - name: Check native pane descriptor cleanup
         if: ${{ !cancelled() && steps.app-build.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' && matrix.platform == 'simulator' }}
+        shell: bash
+        run: |
+          # Standalone pane consumer; the noPython app does not embed workers.
+          dir="$RUNNER_TEMP/pane-input"
+          mkdir -p "$dir"
+          archive="$dir/ios_system.xcframework.zip"
+          curl --fail --location --retry 3 'https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/ios_system.xcframework.zip' --output "$archive"
+          printf '%s  %s\n' bac0689c792901cbf410899162c06ab22a950b032adfb5f94b5c3ab6a661e883 "$archive" | shasum -a 256 -c -
+          ditto -x -k "$archive" "$dir"
+          bash tests/pane-descriptors.sh "$dir/ios_system.xcframework/ios-arm64_x86_64-simulator/ios_system.framework"
+      - name: Install pinned Simulator UI tool
+        id: axe
+        if: ${{ !cancelled() && steps.app-build.outcome == 'success' && matrix.platform == 'simulator' && matrix.scheme == 'a-Shell-noPython' }}
         shell: bash
         run: |
           axe_dir="$RUNNER_TEMP/axe"
@@ -93,7 +107,59 @@ jobs:
           curl --fail --location --retry 3 'https://github.com/cameroncooke/AXe/releases/download/v2.1.1/AXe-macOS-v2.1.1-universal.tar.gz' --output "$archive"
           printf '%s  %s\n' 8788838b1b32059d143cf06541b72fcaead85c16274457cdbff086510a5b17fa "$archive" | shasum -a 256 -c -
           tar -xzf "$archive" -C "$axe_dir"
-          PATH="$axe_dir:$PATH" bash tests/url-logging/run.sh .build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          test -x "$axe_dir/axe"
+          printf '%s\n' "$axe_dir" >> "$GITHUB_PATH"
+      - name: Exercise command URL logging on Simulator
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        run: bash tests/url-logging/run.sh .build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+      - name: Check cloud commands and font registration in the built app
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        shell: bash
+        run: |
+          font="$RUNNER_TEMP/JetBrainsMonoNerdFontMono-Regular.ttf"
+          curl --fail --location --silent --show-error --retry 3 'https://raw.githubusercontent.com/ryanoasis/nerd-fonts/v3.4.0/patched-fonts/JetBrainsMono/Ligatures/Regular/JetBrainsMonoNerdFontMono-Regular.ttf' --output "$font"
+          printf '%s  %s\n' f01031f40e48dc29e1112e6b0b0450a2c6cd097f3f35cfff05c55cb311f8034c "$font" | shasum -a 256 -c -
+          app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          status=0
+          bash tests/simulator-app.sh "$app" tests/simulator-app-commands.sh commands "$font" || status=$?
+          copy="$RUNNER_TEMP/font-coexistence/a-Shell-noPython.app"
+          ditto "$app" "$copy"
+          cp "$font" "$copy/Fixture.ttf"
+          plutil -insert UIAppFonts -json '["Fixture.ttf"]' "$copy/Info.plist"
+          bash tests/simulator-app.sh "$copy" tests/simulator-app-commands.sh bundled-font "$font" || status=$?
+          exit "$status"
+      - name: Check interactive terminal state through the native callback
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        run: bash tests/simulator-interactive-state.sh .build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+      - name: Check cached Photos originals and repeat sync
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        shell: bash
+        run: |
+          jpeg="$RUNNER_TEMP/PhotosCacheFixture.jpg"
+          /usr/bin/base64 -D -i tests/fixtures/photos-cache.jpg.base64 -o "$jpeg"
+          app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          bash tests/simulator-app.sh "$app" tests/simulator-app-commands.sh photos "$jpeg"
+      - name: Check exact WebView WASM stream redirection
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        shell: bash
+        run: |
+          wasm="$RUNNER_TEMP/wasm-output.wasm"
+          uv run --with ziglang==0.16.0 python -m ziglang cc -target wasm32-wasi -O2 tests/wasm-output.c -o "$wasm"
+          app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          bash tests/simulator-app.sh "$app" tests/simulator-app-commands.sh wasm "$wasm"
+      - name: Check relay over loopback with disposable client enrollment
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        shell: bash
+        run: |
+          openssl_dir="$(brew --prefix openssl@3)/bin"
+          test -x "$openssl_dir/openssl"
+          app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          export PATH="$openssl_dir:$PATH"
+          status=0
+          for mode in true false; do
+            bash tests/simulator-app.sh "$app" tests/simulator-relay.sh "$mode" || status=$?
+          done
+          exit "$status"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:

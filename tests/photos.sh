@@ -1,10 +1,14 @@
 #!/bin/sh
 # Run in a disposable working directory after the user answers the Photos prompt.
-photos_contract() {
-    photos > photos-root.txt 2> photos-first.err || return 1
-    root=$(cat photos-root.txt)
-    case "$root" in '~/Documents/'*) ;; *) return 1 ;; esac
+# The Simulator host can drive the two public photos commands separately, then
+# run these same cache assertions against its installed app's data container.
+read_root() {
+    root=$(cat "$1") || return 1
+    test "$root" = \~/Documents/Photos || return 1
     root="$HOME/${root#\~/}"
+}
+photos_before() {
+    read_root photos-root.txt || return 1
     test -f "$root/.photos-index.json" || return 1
     ls "$root" > photos-list.txt || return 1
     find "$root" -type f > photos-find.txt || return 1
@@ -32,8 +36,13 @@ photos_contract() {
     done
     test "$originals" != 0 || return 1
     test -s photos-before.txt || return 1
-    photos > photos-root-repeat.txt 2> photos-repeat.err || return 1
-    test "$(cat photos-root-repeat.txt)" = "$root" || return 1
+    printf 'PHOTOS_GREEN originals=%s video_checked=%s\n' "$originals" "$video_checked" > photos-success.txt
+}
+photos_after() {
+    read_root photos-root.txt || return 1
+    expected_root=$root
+    read_root photos-root-repeat.txt || return 1
+    test "$root" = "$expected_root" || return 1
     : > photos-after.txt
     for file in "$root"/*/*; do
         test -f "$file" || continue
@@ -41,6 +50,14 @@ photos_contract() {
     done
     test -s photos-after.txt || return 1
     test "$(cksum < photos-before.txt)" = "$(cksum < photos-after.txt)" || return 1
-    printf 'PHOTOS_GREEN originals=%s video_checked=%s\n' "$originals" "$video_checked"
+    cat photos-success.txt
 }
-photos_contract
+case ${1:-all} in
+    before) photos_before ;;
+    after) photos_after ;;
+    all)
+        photos > photos-root.txt 2> photos-first.err && photos_before &&
+            photos > photos-root-repeat.txt 2> photos-repeat.err && photos_after
+        ;;
+    *) printf 'usage: sh photos.sh [before|after]\n' >&2; exit 2 ;;
+esac

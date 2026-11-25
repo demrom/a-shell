@@ -30,16 +30,27 @@ pid=${launch##*: }
 literal='URI_LOG_%s_OK'
 xcrun simctl openurl "$udid" "ashellmini:echo%20URI_LOG_%25s_OK%20%3E%20$receipt"
 attempt=0
+ui_errors=0
 while [ "$attempt" -lt 100 ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
         printf 'FAIL: app exited while opening a URL containing %%s\n' >&2
         exit 1
     fi
-    if [ -n "$confirm" ] && [ "$((attempt % 5))" -eq 0 ] &&
-        axe describe-ui --udid "$udid" | jq -e --arg prompt "$prompt" \
-            'any(.. | objects; .type == "Sheet" and .AXLabel == $prompt)' >/dev/null; then
-        axe tap --udid "$udid" --element-type Button --label Open >/dev/null
-        confirm=
+    if [ -n "$confirm" ] && [ ! -s "$receipt" ] && [ "$((attempt % 5))" -eq 4 ]; then
+        if tree=$(axe describe-ui --udid "$udid"); then
+            ui_errors=0
+            if printf '%s\n' "$tree" | jq -e --arg prompt "$prompt" \
+                'any(.. | objects; .type == "Sheet" and .AXLabel == $prompt)' >/dev/null; then
+                axe tap --udid "$udid" --element-type Button --label Open >/dev/null
+                confirm=
+            fi
+        else
+            ui_errors=$((ui_errors + 1))
+            if [ "$ui_errors" -ge 3 ]; then
+                printf 'FAIL: Simulator UI automation failed three times\n' >&2
+                exit 1
+            fi
+        fi
     fi
     if [ -s "$receipt" ]; then
         actual=$(cat "$receipt")
