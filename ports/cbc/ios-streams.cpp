@@ -21,14 +21,14 @@ extern "C" int cbc_ios_printf(const char *format, ...)
 {
     va_list args;
     va_start(args, format);
-    int result = vfprintf(ios_stderr(), format, args);
+    int result = vfprintf(ios_stdout(), format, args);
     va_end(args);
     return result;
 }
 
 extern "C" int cbc_ios_puts(const char *line)
 {
-    return fprintf(ios_stderr(), "%s\n", line);
+    return fprintf(ios_stdout(), "%s\n", line);
 }
 
 extern "C" void cbc_ios_perror(const char *prefix)
@@ -41,7 +41,7 @@ extern "C" void cbc_ios_perror(const char *prefix)
 extern "C" [[noreturn]] void cbc_ios_abort()
 {
     fputs("cbc: solver aborted\n", ios_stderr());
-    ios_exit(1);
+    ios_exit(7);
 }
 
 namespace {
@@ -75,7 +75,7 @@ struct CommandLocale {
 
 std::ostream &cbc_ios_cout()
 {
-    thread_local FileOutput buffer(ios_stderr);
+    thread_local FileOutput buffer(ios_stdout);
     thread_local std::ostream stream(&buffer);
     return stream;
 }
