@@ -1,0 +1,32 @@
+--- a/Clp/Clp/src/CbcOrClpParam.cpp
++++ b/Clp/Clp/src/CbcOrClpParam.cpp
+@@ -1206,0 +1207,10 @@
++#ifdef CBC_IOS_SYSTEM
++void cbc_ios_reset_parser()
++{
++  where = NULL;
++  afterEquals.clear();
++  CbcOrClpEnvironmentIndex = -1;
++  delete[] alternativeEnvironment;
++  alternativeEnvironment = NULL;
++}
++#endif
+--- a/Clp/Clp/src/ClpSimplexOther.cpp
++++ b/Clp/Clp/src/ClpSimplexOther.cpp
+@@ -658,0 +659 @@
++#ifndef CBC_IOS_SYSTEM // The command entry point sets a thread-local C locale.
+@@ -660,0 +662 @@
++#endif
+@@ -742,0 +745 @@
++#ifndef CBC_IOS_SYSTEM
+@@ -744,0 +748 @@
++#endif
+--- a/Clp/Clp/src/ClpSolve.cpp
++++ b/Clp/Clp/src/ClpSolve.cpp
+@@ -901,0 +902,4 @@
++  // The host owns SIGINT; do not install a process-wide solver handler.
++#ifdef CBC_IOS_SYSTEM
++  const bool interrupt = false;
++#else
+@@ -902,0 +907 @@
++#endif

@@ -1,0 +1,41 @@
+name: CBC framework
+
+on:
+  pull_request:
+    paths:
+      - 'ports/cbc/**'
+      - 'scripts/build-cbc.sh'
+      - 'tests/cbc/**'
+      - 'Resources/commandDictionary.plist'
+      - '.github/workflows/cbc-framework.yml'
+  push:
+    branches: [ci/cbc-framework]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - name: Build and test the CBC framework
+        id: cbc
+        run: |
+          xcodebuild -version
+          nice -n 15 scripts/build-cbc.sh
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: cbc-framework
+          if-no-files-found: error
+          include-hidden-files: true
+          path: |
+            ${{ steps.cbc.outputs.dist }}/cbc.xcframework.zip
+            ${{ steps.cbc.outputs.dist }}/checksums.txt
+            ${{ steps.cbc.outputs.dist }}/cbc-smoke.log

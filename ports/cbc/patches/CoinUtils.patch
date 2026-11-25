@@ -1,0 +1,16 @@
+--- a/CoinUtils/CoinUtils/src/CoinFileIO.cpp
++++ b/CoinUtils/CoinUtils/src/CoinFileIO.cpp
+@@ -70 +70,2 @@
+-  if (f_ != 0)
++  // ios_system owns its command input, even when its fd is not STDIN_FILENO.
++  if (f_ != 0 && f_ != stdin)
+--- a/CoinUtils/CoinUtils/src/CoinMpsIO.cpp
++++ b/CoinUtils/CoinUtils/src/CoinMpsIO.cpp
+@@ -4134,0 +4135 @@
++#ifndef CBC_IOS_SYSTEM // The command entry point sets a thread-local C locale.
+@@ -4136,0 +4138 @@
++#endif
+@@ -4730,0 +4733 @@
++#ifndef CBC_IOS_SYSTEM
+@@ -4732,0 +4736 @@
++#endif

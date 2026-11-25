@@ -1,0 +1,13 @@
+--- a/Cbc/Cbc/src/CbcSolver.cpp
++++ b/Cbc/Cbc/src/CbcSolver.cpp
+@@ -988 +988 @@
+-FILE *CbcOrClpReadCommand = stdin;
++FILE *CbcOrClpReadCommand = NULL; // Set by the ios_system command entry point.
+@@ -1468 +1468 @@
+-#if CBC_QUIET < 2
++#if CBC_QUIET < 2 && !defined(CBC_IOS_SYSTEM)
+--- a/Cbc/Cbc/src/CoinSolve.cpp
++++ b/Cbc/Cbc/src/CoinSolve.cpp
+@@ -309 +309 @@
+-int main(int argc, const char *argv[])
++int cbc_cli_main(int argc, const char *argv[])
