@@ -1,0 +1,585 @@
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -98,16 +98,25 @@
+ )
+ 
+ # Build curl executable
+-add_executable(${EXE_NAME} ${CURL_CFILES} ${CURL_HFILES} ${_curl_cfiles_gen} ${_curl_hfiles_gen} ${CURLX_CFILES} ${CURLX_HFILES})
++add_library(${EXE_NAME} SHARED ${CURL_CFILES} ${CURL_HFILES} ${_curl_cfiles_gen} ${_curl_hfiles_gen} ${CURLX_CFILES} ${CURLX_HFILES})
+ target_compile_definitions(${EXE_NAME} PRIVATE ${_curl_definitions})
+-target_link_libraries(${EXE_NAME} ${LIB_SELECTED_FOR_EXE} ${CURL_LIBS})
++target_link_libraries(${EXE_NAME} ${LIB_SELECTED_FOR_EXE} ${CURL_LIBS} "${ASHELL_IOS_SYSTEM}")
++set_target_properties(${EXE_NAME} PROPERTIES
++  FRAMEWORK TRUE
++  MACOSX_FRAMEWORK_IDENTIFIER app.ashell.curl-impersonate
++  MACOSX_FRAMEWORK_SHORT_VERSION_STRING "${CURL_IMPERSONATE_VERSION}"
++  MACOSX_FRAMEWORK_BUNDLE_VERSION "${CURL_IMPERSONATE_VERSION}"
++  INSTALL_NAME_DIR "@rpath"
++  BUILD_WITH_INSTALL_NAME_DIR TRUE
++  BUILD_WITH_INSTALL_RPATH TRUE
++  LINKER_LANGUAGE CXX)
++target_link_options(${EXE_NAME} PRIVATE "LINKER:-exported_symbol,_curl_impersonate_main")
+ set_property(TARGET ${EXE_NAME} APPEND PROPERTY COMPILE_OPTIONS "${CURL_CFLAGS}")
+-set_property(TARGET ${EXE_NAME} APPEND PROPERTY LINKER_LANGUAGE CXX)
+ if(WIN32)
+   set_property(TARGET ${EXE_NAME} APPEND PROPERTY SOURCES ${CURL_RCFILES})
+ endif()
+ 
+-add_executable(${PROJECT_NAME}::${EXE_NAME} ALIAS ${EXE_NAME})
++add_library(${PROJECT_NAME}::${EXE_NAME} ALIAS ${EXE_NAME})
+ 
+ add_executable(curlinfo EXCLUDE_FROM_ALL "curlinfo.c")
+ target_link_libraries(curlinfo PRIVATE ${CURL_LIBS})
+--- a/src/config2setopts.c
++++ b/src/config2setopts.c
+@@ -124,8 +124,8 @@
+ /* return current SSL backend name, chop off multissl */
+ static char *ssl_backend(void)
+ {
+-  static char ssl_ver[80] = "no ssl";
+-  static bool already = FALSE;
++  static __thread char ssl_ver[80] = "no ssl";
++  static __thread bool already = FALSE;
+   if(!already) { /* if there is no existing version */
+     const char *v = curl_version_info(CURLVERSION_NOW)->ssl_version;
+     if(v)
+--- a/src/tool_cb_dbg.c
++++ b/src/tool_cb_dbg.c
+@@ -34,8 +34,8 @@
+  */
+ static const char *hms_for_sec(time_t tv_sec)
+ {
+-  static time_t cached_tv_sec;
+-  static char hms_buf[12];
++  static __thread time_t cached_tv_sec;
++  static __thread char hms_buf[12];
+ 
+   if(tv_sec != cached_tv_sec) {
+     struct tm now;
+@@ -188,8 +188,8 @@
+   }
+ 
+   if(global->tracetype == TRACE_PLAIN) {
+-    static bool newl = FALSE;
+-    static bool traced_data = FALSE;
++    static __thread bool newl = FALSE;
++    static __thread bool traced_data = FALSE;
+ 
+     switch(type) {
+     case CURLINFO_HEADER_OUT:
+--- a/src/tool_cb_rea.c
++++ b/src/tool_cb_rea.c
+@@ -160,7 +160,7 @@
+ {
+   struct per_transfer *per = clientp;
+   struct OperationConfig *config = per->config;
+-  static curl_off_t ulprev;
++  static __thread curl_off_t ulprev;
+ 
+   (void)dltotal;
+   (void)dlnow;
+--- a/src/tool_cfgable.c
++++ b/src/tool_cfgable.c
+@@ -32,8 +32,8 @@
+ #include "tool_main.h"
+ #include "tool_msgs.h"
+ 
+-static struct GlobalConfig globalconf;
+-struct GlobalConfig *global;
++static __thread struct GlobalConfig globalconf;
++__thread struct GlobalConfig *global;
+ 
+ struct OperationConfig *config_alloc(void)
+ {
+@@ -336,6 +336,7 @@
+ CURLcode globalconf_init(void)
+ {
+   CURLcode result = CURLE_OK;
++  memset(&globalconf, 0, sizeof(globalconf));
+   global = &globalconf;
+ 
+ #ifdef __DJGPP__
+--- a/src/tool_cfgable.h
++++ b/src/tool_cfgable.h
+@@ -33,7 +33,7 @@
+ 
+ #define checkprefix(a, b) curl_strnequal(b, STRCONST(a))
+ 
+-extern struct GlobalConfig *global;
++extern __thread struct GlobalConfig *global;
+ 
+ struct State {
+   struct getout *urlnode;
+@@ -376,6 +376,7 @@
+                                      many milliseconds */
+   trace tracetype;
+   int progressmode;               /* CURL_PROGRESS_BAR / CURL_PROGRESS_STATS */
++  int next_url_number;            /* Shared by all operations of this command */
+   unsigned short parallel_host; /* MAX_PARALLEL_HOST is the maximum */
+   unsigned short parallel_max; /* MAX_PARALLEL is the maximum */
+   unsigned char verbosity;        /* How verbose we should be */
+--- a/src/tool_dirhie.c
++++ b/src/tool_dirhie.c
+@@ -29,7 +29,7 @@
+ #ifdef UNITTESTS
+ #define toolx_mkdir(x, y) create_dir_hierarchy_trace_mkdir(x)
+ 
+-static struct dynbuf mkdir_results;
++static __thread struct dynbuf mkdir_results;
+ 
+ UNITTEST struct dynbuf *create_dir_hierarchy_trace_dynres(void)
+ {
+--- a/src/tool_easysrc.c
++++ b/src/tool_easysrc.c
+@@ -33,21 +33,21 @@
+ 
+ /* global variable definitions, for easy-interface source code generation */
+ 
+-struct slist_wc *easysrc_decl; /* Variable declarations */
+-struct slist_wc *easysrc_data; /* Build slists, forms etc. */
+-struct slist_wc *easysrc_code; /* Setopt calls */
+-struct slist_wc *easysrc_toohard; /* Unconvertible setopt */
+-struct slist_wc *easysrc_clean;  /* Clean up allocated data */
+-int easysrc_mime_count;
+-int easysrc_slist_count;
+-static bool easysrc_performed;
++__thread struct slist_wc *easysrc_decl; /* Variable declarations */
++__thread struct slist_wc *easysrc_data; /* Build slists, forms etc. */
++__thread struct slist_wc *easysrc_code; /* Setopt calls */
++__thread struct slist_wc *easysrc_toohard; /* Unconvertible setopt */
++__thread struct slist_wc *easysrc_clean;  /* Clean up allocated data */
++__thread int easysrc_mime_count;
++__thread int easysrc_slist_count;
++static __thread bool easysrc_performed;
+ 
+ /* Set once a transfer has been performed, so that the next generated
+    statement resets the handle first: the tool uses a fresh easy handle per
+    operation, the generated code reuses one. Deferred rather than emitted
+    right after curl_easy_perform() so that no reset is generated when nothing
+    follows. */
+-static bool easysrc_pending_reset = FALSE;
++static __thread bool easysrc_pending_reset = FALSE;
+ 
+ static const char * const srchead[] = {
+   "/********* Sample code generated by the curl command line tool **********",
+--- a/src/tool_easysrc.h
++++ b/src/tool_easysrc.h
+@@ -29,14 +29,14 @@
+ 
+ /* global variable declarations, for easy-interface source code generation */
+ 
+-extern struct slist_wc *easysrc_decl; /* Variable declarations */
+-extern struct slist_wc *easysrc_data; /* Build slists, forms etc. */
+-extern struct slist_wc *easysrc_code; /* Setopt calls etc. */
+-extern struct slist_wc *easysrc_toohard; /* Unconvertible setopt */
+-extern struct slist_wc *easysrc_clean;  /* Clean up (reverse order) */
++extern __thread struct slist_wc *easysrc_decl; /* Variable declarations */
++extern __thread struct slist_wc *easysrc_data; /* Build slists, forms etc. */
++extern __thread struct slist_wc *easysrc_code; /* Setopt calls etc. */
++extern __thread struct slist_wc *easysrc_toohard; /* Unconvertible setopt */
++extern __thread struct slist_wc *easysrc_clean;  /* Clean up (reverse order) */
+ 
+-extern int easysrc_mime_count;  /* Number of curl_mime variables */
+-extern int easysrc_slist_count; /* Number of curl_slist variables */
++extern __thread int easysrc_mime_count;  /* Number of curl_mime variables */
++extern __thread int easysrc_slist_count; /* Number of curl_slist variables */
+ 
+ extern CURLcode easysrc_init(void);
+ extern CURLcode easysrc_add(struct slist_wc **plist, const char *line);
+--- a/src/tool_getparam.c
++++ b/src/tool_getparam.c
+@@ -879,8 +879,8 @@
+ 
+ const struct LongShort *findshortopt(char letter)
+ {
+-  static const struct LongShort *singles[128 - ' ']; /* ASCII => pointer */
+-  static bool singles_done = FALSE;
++  static __thread const struct LongShort *singles[128 - ' ']; /* ASCII => pointer */
++  static __thread bool singles_done = FALSE;
+   if((letter >= 127) || (letter <= ' '))
+     return NULL;
+ 
+@@ -1573,7 +1573,7 @@
+   return err;
+ }
+ 
+-static size_t verbose_nopts;
++static __thread size_t verbose_nopts;
+ 
+ static ParameterError parse_verbose(bool toggle)
+ {
+--- a/src/tool_getpass.c
++++ b/src/tool_getpass.c
+@@ -126,8 +126,8 @@
+ static bool ttyecho(bool enable, int fd)
+ {
+ #ifdef struct_term
+-  static struct_term withecho;
+-  static struct_term noecho;
++  static __thread struct_term withecho;
++  struct_term noecho;
+ #endif
+   if(!enable) {
+     /* disable echo by extracting the current 'withecho' mode and remove the
+--- a/src/tool_libinfo.c
++++ b/src/tool_libinfo.c
+@@ -131,22 +131,23 @@
+  * the latter is not returned by curl_version_info(), it is built from
+  * the returned features bit mask.
+  */
+-CURLcode get_libcurl_info(void)
++static CURLcode libinfo_result = CURLE_FAILED_INIT;
++
++static void init_libcurl_info(void)
+ {
+-  CURLcode result = CURLE_OK;
+   const char * const *builtin;
+ 
+   /* Pointer to libcurl's runtime version information */
+   curlinfo = curl_version_info(CURLVERSION_NOW);
+   if(!curlinfo)
+-    return CURLE_FAILED_INIT;
++    return;
+ 
+   if(curlinfo->protocols) {
+     const struct proto_name_tokenp *p;
+ 
+     built_in_protos = curlinfo->protocols;
+ 
+-    for(builtin = built_in_protos; !result && *builtin; builtin++) {
++    for(builtin = built_in_protos; *builtin; builtin++) {
+       /* Identify protocols we are interested in. */
+       for(p = possibly_built_in; p->proto_name; p++)
+         if(curl_strequal(p->proto_name, *builtin)) {
+@@ -182,7 +183,14 @@
+     ++feature_count;
+   }
+ 
+-  return CURLE_OK;
++  libinfo_result = CURLE_OK;
++}
++
++CURLcode get_libcurl_info(void)
++{
++  static pthread_once_t once = PTHREAD_ONCE_INIT;
++  pthread_once(&once, init_libcurl_info);
++  return libinfo_result;
+ }
+ 
+ /* Tokenize a protocol name.
+--- a/src/tool_main.c
++++ b/src/tool_main.c
+@@ -73,40 +73,6 @@
+ /* if we build a static library for unit tests, there is no main() function */
+ #ifndef UNITTESTS
+ 
+-/*
+- * Ensure that file descriptors 0, 1 and 2 (stdin, stdout, stderr) are
+- * open before starting to run. Otherwise, the first three network
+- * sockets opened by curl could be used for input sources, downloaded data
+- * or error logs as they are effectively stdin, stdout and/or stderr.
+- *
+- * fcntl's F_GETFD instruction returns -1 if the file descriptor is closed,
+- * otherwise it returns "the file descriptor flags (which typically can only
+- * be FD_CLOEXEC, which is not set here).
+- */
+-static int main_checkfds(void)
+-{
+-#if defined(HAVE_FCNTL) && defined(HAVE_PIPE)
+-  const char * const devnull = "/dev/null";
+-  int fd;
+-  while((fcntl(STDIN_FILENO, F_GETFD) == -1)) {
+-    fd = curlx_open(devnull, O_RDONLY);
+-    if(fd < 0)
+-      return 1;
+-  }
+-  while((fcntl(STDOUT_FILENO, F_GETFD) == -1)) {
+-    fd = curlx_open(devnull, O_WRONLY);
+-    if(fd < 0)
+-      return 1;
+-  }
+-  while((fcntl(STDERR_FILENO, F_GETFD) == -1)) {
+-    fd = curlx_open(devnull, O_WRONLY);
+-    if(fd < 0)
+-      return 1;
+-  }
+-#endif /* HAVE_FCNTL && HAVE_PIPE */
+-  return 0;
+-}
+-
+ #ifdef CURL_MEMDEBUG
+ static void memory_tracking_init(void)
+ {
+@@ -149,12 +115,14 @@
+ #endif
+ int wmain(int argc, wchar_t *argv[])
+ #else
+-int main(int argc, char *argv[])
++int curl_impersonate_main(int argc, char *argv[]);
++int curl_impersonate_main(int argc, char *argv[])
+ #endif
+ {
+   CURLcode result = CURLE_OK;
+ 
+   tool_init_stderr();
++  pthread_cleanup_push(tool_cleanup_stderr, NULL);
+ 
+ #ifdef _WIN32
+   /* Undocumented diagnostic option to list the full paths of all loaded
+@@ -175,17 +143,7 @@
+   }
+ #endif
+ 
+-  if(main_checkfds()) {
+-    errorf("out of file descriptors");
+-    return CURLE_FAILED_INIT;
+-  }
+-
+-#if defined(HAVE_SIGNAL) && defined(SIGPIPE)
+-#ifdef DEBUGBUILD
+-  if(!curl_getenv("CURL_SIGPIPE_DEBUG"))
+-#endif
+-  (void)signal(SIGPIPE, SIG_IGN);
+-#endif
++  /* ios_system owns the process file descriptors and signal handlers. */
+ 
+   /* Initialize memory tracking */
+   memory_tracking_init();
+@@ -201,6 +159,8 @@
+     globalconf_free();
+   }
+ 
++  pthread_cleanup_pop(1);
++
+ #ifdef _WIN32
+   /* Flush buffers of all streams opened in write or update mode */
+   fflush(NULL);
+--- a/src/tool_operate.c
++++ b/src/tool_operate.c
+@@ -184,8 +184,8 @@
+ }
+ #endif /* __VMS */
+ 
+-struct per_transfer *transfers; /* first node */
+-static struct per_transfer *transfersl; /* last node */
++__thread struct per_transfer *transfers; /* first node */
++static __thread struct per_transfer *transfersl; /* last node */
+ 
+ /* add_per_transfer creates a new 'per_transfer' node in the linked
+    list of transfers */
+@@ -1553,7 +1553,7 @@
+   return create_single(config, share, state, added, skipped);
+ }
+ 
+-static long all_added; /* number of easy handles currently added */
++static __thread long all_added; /* number of easy handles currently added */
+ 
+ /*
+  * add_parallel_transfers() sets 'morep' to TRUE if there are more transfers
+@@ -1994,6 +1994,8 @@
+   CURLcode result;
+   struct parastate p;
+   struct parastate *s = &p;
++  all_added = 0;
++  progress_reset();
+   s->share = share;
+   s->mcode = CURLM_OK;
+   s->result = CURLE_OK;
+@@ -2403,7 +2405,7 @@
+ {
+   CURLcode result = CURLE_OK;
+   int i;
+-  static int options[7] = {
++  int options[7] = {
+     CURL_LOCK_DATA_COOKIE,
+     CURL_LOCK_DATA_DNS,
+     CURL_LOCK_DATA_SSL_SESSION,
+--- a/src/tool_operate.h
++++ b/src/tool_operate.h
+@@ -82,6 +82,6 @@
+ CURLcode operate(int argc, argv_item_t argv[]);
+ void single_transfer_cleanup(void);
+ 
+-extern struct per_transfer *transfers; /* first node */
++extern __thread struct per_transfer *transfers; /* first node */
+ 
+ #endif /* HEADER_CURL_TOOL_OPERATE_H */
+--- a/src/tool_paramhlp.c
++++ b/src/tool_paramhlp.c
+@@ -37,8 +37,6 @@
+   struct getout *node = curlx_calloc(1, sizeof(struct getout));
+   struct getout *last = config->url_last;
+   if(node) {
+-    static int outnum = 0;
+-
+     /* append this new node last in the list */
+     if(last)
+       last->next = node;
+@@ -49,7 +47,7 @@
+     config->url_last = node;
+ 
+     node->useremote = config->remote_name_all;
+-    node->num = outnum++;
++    node->num = global->next_url_number++;
+   }
+   return node;
+ }
+--- a/src/tool_progress.c
++++ b/src/tool_progress.c
+@@ -127,10 +127,10 @@
+   }
+ }
+ 
+-static curl_off_t all_dltotal = 0;
+-static curl_off_t all_ultotal = 0;
+-static curl_off_t all_dlalready = 0;
+-static curl_off_t all_ulalready = 0;
++static __thread curl_off_t all_dltotal = 0;
++static __thread curl_off_t all_ultotal = 0;
++static __thread curl_off_t all_dlalready = 0;
++static __thread curl_off_t all_ulalready = 0;
+ 
+ struct speedcount {
+   curl_off_t dl;
+@@ -138,9 +138,21 @@
+   struct curltime stamp;
+ };
+ #define SPEEDCNT 10
+-static unsigned int speedindex;
+-static bool indexwrapped;
+-static struct speedcount speedstore[SPEEDCNT];
++static __thread unsigned int speedindex;
++static __thread bool indexwrapped;
++static __thread struct speedcount speedstore[SPEEDCNT];
++static __thread struct curltime stamp;
++static __thread bool header;
++
++void progress_reset(void)
++{
++  all_dltotal = all_ultotal = all_dlalready = all_ulalready = 0;
++  speedindex = 0;
++  indexwrapped = FALSE;
++  memset(speedstore, 0, sizeof(speedstore));
++  memset(&stamp, 0, sizeof(stamp));
++  header = FALSE;
++}
+ 
+ static void add_offt(curl_off_t *val, curl_off_t add)
+ {
+@@ -157,8 +169,6 @@
+  */
+ bool progress_meter(CURLM *multi, struct curltime *start, bool final)
+ {
+-  static struct curltime stamp;
+-  static bool header = FALSE;
+   struct curltime now;
+   timediff_t diff;
+ 
+--- a/src/tool_progress.h
++++ b/src/tool_progress.h
+@@ -31,6 +31,7 @@
+                 curl_off_t ultotal,
+                 curl_off_t ulnow);
+ 
++void progress_reset(void);
+ bool progress_meter(CURLM *multi,
+                     struct curltime *start,
+                     bool final);
+--- a/src/tool_setup.h
++++ b/src/tool_setup.h
+@@ -39,7 +39,30 @@
+ 
+ #include "curl_setup.h" /* from the lib directory */
+ 
+-extern FILE *tool_stderr;
++/* The app owns these streams; redirect only curl's CLI, not libcurl. */
++#include <curl/mprintf.h>
++#include <pthread.h>
++
++extern FILE *ios_stdin(void);
++extern FILE *ios_stdout(void);
++extern FILE *ios_stderr(void);
++
++#undef stdin
++#undef stdout
++#undef stderr
++#undef STDIN_FILENO
++#undef STDOUT_FILENO
++#undef STDERR_FILENO
++#define stdin ios_stdin()
++#define stdout ios_stdout()
++#define stderr ios_stderr()
++#define STDIN_FILENO fileno(stdin)
++#define STDOUT_FILENO fileno(stdout)
++#define STDERR_FILENO fileno(stderr)
++#define curl_mprintf(...) curl_mfprintf(stdout, __VA_ARGS__)
++#define puts(s) curl_mfprintf(stdout, "%s\n", (s))
++
++extern __thread FILE *tool_stderr;
+ 
+ /*
+  * curl tool certainly uses libcurl's external interface.
+--- a/src/tool_stderr.c
++++ b/src/tool_stderr.c
+@@ -26,7 +26,17 @@
+ #include "tool_stderr.h"
+ #include "tool_msgs.h"
+ 
+-FILE *tool_stderr;
++__thread FILE *tool_stderr;
++static __thread FILE *owned_stderr;
++
++void tool_cleanup_stderr(void *unused)
++{
++  (void)unused;
++  if(owned_stderr) {
++    curlx_fclose(owned_stderr);
++    owned_stderr = NULL;
++  }
++}
+ 
+ void tool_init_stderr(void)
+ {
+@@ -42,28 +52,17 @@
+     return;
+ 
+   if(!strcmp(filename, "-")) {
++    tool_cleanup_stderr(NULL);
+     tool_stderr = stdout;
+     return;
+   }
+ 
+-  /* precheck that filename is accessible to lessen the chance that the
+-     subsequent freopen fails. */
++  /* Never freopen or close a stream borrowed from ios_system. */
+   fp = curlx_fopen(filename, FOPEN_WRITETEXT);
+   if(!fp) {
+     warnf("Warning: Failed to open %s", filename);
+     return;
+   }
+-  curlx_fclose(fp);
+-
+-  /* freopen the actual stderr (stdio.h stderr) instead of tool_stderr since
+-     the latter may be set to stdout. */
+-  /* !checksrc! disable STDERR 1 */
+-  fp = curlx_freopen(filename, FOPEN_WRITETEXT, stderr);
+-  if(!fp) {
+-    /* stderr may have been closed by freopen. there is nothing to be done. */
+-    DEBUGASSERT(0);
+-    return;
+-  }
+-  /* !checksrc! disable STDERR 1 */
+-  tool_stderr = stderr;
++  tool_cleanup_stderr(NULL);
++  owned_stderr = tool_stderr = fp;
+ }
+--- a/src/tool_stderr.h
++++ b/src/tool_stderr.h
+@@ -28,6 +28,7 @@
+ #include "tool_cfgable.h"
+ 
+ void tool_init_stderr(void);
++void tool_cleanup_stderr(void *unused);
+ void tool_set_stderr_file(const char *filename);
+ 
+ #endif /* HEADER_CURL_TOOL_STDERR_H */

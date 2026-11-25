@@ -1,0 +1,33 @@
+name: curl-impersonate xcframework
+on:
+  pull_request:
+    paths:
+      - .github/workflows/curl-impersonate.yml
+      - ci/build-curl-impersonate.sh
+      - ci/curl-impersonate/**
+  push:
+    paths:
+      - .github/workflows/curl-impersonate.yml
+      - ci/build-curl-impersonate.sh
+      - ci/curl-impersonate/**
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 90
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build and audit curl-impersonate
+        run: ci/build-curl-impersonate.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: curl-impersonate-xcframework
+          path: .build/curl-impersonate/dist/
+          include-hidden-files: true
+          if-no-files-found: error

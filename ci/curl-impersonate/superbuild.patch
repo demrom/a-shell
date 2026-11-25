@@ -1,0 +1,126 @@
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -186,6 +186,8 @@
+ if(CMAKE_OSX_SYSROOT)
+   list(APPEND _toolchain_cmake_args "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}")
+ endif()
++# Pass the slice architecture to the assembler as well as the C/C++ compilers.
++list(APPEND _toolchain_cmake_args "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}")
+ if(CMAKE_OSX_DEPLOYMENT_TARGET)
+   list(APPEND _toolchain_cmake_args "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}")
+ endif()
+@@ -242,6 +244,8 @@
+ endif()
+ ExternalProject_Add(cares
+   URL "${CARES_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${CARES_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/cares"
+   BINARY_DIR "${DEPS_BUILD_DIR}/cares"
+@@ -262,6 +266,8 @@
+ # zlib
+ ExternalProject_Add(zlib
+   URL "${ZLIB_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${ZLIB_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/zlib"
+   BINARY_DIR "${DEPS_BUILD_DIR}/zlib"
+@@ -277,6 +283,8 @@
+ # zstd
+ ExternalProject_Add(zstd
+   URL "${ZSTD_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${ZSTD_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/zstd"
+   BINARY_DIR "${DEPS_BUILD_DIR}/zstd"
+@@ -297,6 +305,8 @@
+ _track_external_project_patch(brotli _brotli_patch_file _brotli_patch_changed)
+ ExternalProject_Add(brotli
+   URL "${BROTLI_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${BROTLI_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/brotli"
+   BINARY_DIR "${DEPS_BUILD_DIR}/brotli"
+@@ -323,7 +333,8 @@
+ set(_boringssl_c_flags "${CMAKE_C_FLAGS}")
+ string(APPEND _boringssl_c_flags " -Wno-unknown-warning-option -Wno-stringop-overflow -Wno-array-bounds -Wno-macro-redefined")
+ set(_boringssl_cxx_flags "${CMAKE_CXX_FLAGS}")
+-string(APPEND _boringssl_cxx_flags " -Wno-macro-redefined")
++# Newer Xcode SDKs warn about iOS 14 even when availability checks pass.
++string(APPEND _boringssl_cxx_flags " -Wno-macro-redefined -Wno-error=#warnings")
+ 
+ set(_boringssl_cmake_args
+   ${_common_cmake_args}
+@@ -344,6 +355,8 @@
+ )
+ ExternalProject_Add(boringssl
+   URL "${BORINGSSL_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${BORINGSSL_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/boringssl"
+   BINARY_DIR "${DEPS_BUILD_DIR}/boringssl"
+@@ -375,6 +388,8 @@
+ # nghttp2
+ ExternalProject_Add(nghttp2
+   URL "${NGHTTP2_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${NGHTTP2_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/nghttp2"
+   BINARY_DIR "${DEPS_BUILD_DIR}/nghttp2"
+@@ -397,6 +412,8 @@
+ _track_external_project_patch(nghttp3 _nghttp3_patch_file _nghttp3_patch_changed)
+ ExternalProject_Add(nghttp3
+   URL "${NGHTTP3_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${NGHTTP3_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/nghttp3"
+   BINARY_DIR "${DEPS_BUILD_DIR}/nghttp3"
+@@ -430,6 +447,8 @@
+ ExternalProject_Add(ngtcp2
+   LIST_SEPARATOR |
+   URL "${NGTCP2_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${NGTCP2_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/ngtcp2"
+   BINARY_DIR "${DEPS_BUILD_DIR}/ngtcp2"
+@@ -498,9 +517,9 @@
+   set(_curl_idn_flags -DUSE_LIBIDN2=OFF)
+ endif()
+ 
+-# Single curl build mode: produce shared+static libcurl and static curl binary.
++# Link static libcurl into the command framework.
+ set(_curl_build_flags
+-  -DBUILD_SHARED_LIBS=ON
++  -DBUILD_SHARED_LIBS=OFF
+   -DBUILD_STATIC_LIBS=ON
+   -DBUILD_STATIC_CURL=ON
+   -DBUILD_CURL_EXE=ON
+@@ -637,6 +656,8 @@
+ ExternalProject_Add(curl
+   LIST_SEPARATOR |
+   URL "${CURL_URL}"
++  DOWNLOAD_DIR "${ASHELL_DOWNLOAD_DIR}"
++  INACTIVITY_TIMEOUT 60
+   URL_HASH "${CURL_URL_HASH}"
+   SOURCE_DIR "${DEPS_SRC_DIR}/curl"
+   BINARY_DIR "${DEPS_BUILD_DIR}/curl"
+@@ -696,6 +717,11 @@
+       ${_curl_idn_flags}
+       ${_curl_build_flags}
+       ${_curl_platform_flags}
++      -DCURL_DISABLE_INSTALL=ON
++      -DCURL_ENABLE_EXPORT_TARGET=OFF
++      -DHAVE_SIGNAL=OFF
++      -DHAVE_SETLOCALE=OFF
++      -DASHELL_IOS_SYSTEM=${ASHELL_IOS_SYSTEM}
+       -GNinja
+       -S <SOURCE_DIR> -B <BINARY_DIR>
+   BUILD_COMMAND
