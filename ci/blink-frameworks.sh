@@ -56,9 +56,12 @@ for spec in iphoneos:arm64 iphonesimulator:arm64 iphonesimulator:x86_64; do
     CROSS_COMPILE=1 sh configure --disable-jit --disable-fork MODE= CC=clang \
       "CFLAGS=-O2 -target $triple -isysroot $sdkroot" \
       "LDFLAGS=-dynamiclib -target $triple -isysroot $sdkroot -Wl,-no_fixup_chains"
-    gmake -j2 "VM=$work/host/o/blink/blink" \
+    # The Makefile expands VM unquoted, so use a path relative to this slice.
+    gmake -j2 VM=../host/o/blink/blink \
       'BLINK_COMMITS=-DBLINK_COMMITS=\"593\"' \
       "BLINK_GITSHA=-DBLINK_GITSHA=\\\"$revision\\\"" o//blink/blink
+    # Upstream's optional make include can hide failures in the host tool.
+    test -s o/depend
   )
   framework="$work/frameworks/$sdk-$arch/blink.framework"
   mkdir -p "$framework"
