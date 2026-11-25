@@ -5,17 +5,18 @@ build=${1:-"$root/.build/openrsync"}
 device=${2:?Pass an owned booted Simulator UUID}
 build=$(cd "$build" && pwd)
 app="$build/openrsync-runtime.app"
+target="$(uname -m)-apple-ios14.0-simulator"
 {
 mkdir -p "$app/Frameworks"
 for name in openrsync openrsyncA; do
   cp -R "$build/dist/$name.xcframework/ios-arm64_x86_64-simulator/$name.framework" "$app/Frameworks/"
 done
 cp -R "$build/dependencies/ios_system.xcframework/ios-arm64_x86_64-simulator/ios_system.framework" "$app/Frameworks/"
-xcrun --sdk iphonesimulator clang -target arm64-apple-ios14.0-simulator -fobjc-arc "$root/tests/openrsync/main.m" \
+xcrun --sdk iphonesimulator clang -target "$target" -fobjc-arc "$root/tests/openrsync/main.m" \
   -F"$app/Frameworks" -framework ios_system -framework Foundation \
   -Wl,-rpath,@executable_path/Frameworks -o "$app/openrsync-runtime"
 mkdir -p "$app/Frameworks/peer.framework"
-xcrun --sdk iphonesimulator clang -target arm64-apple-ios14.0-simulator -dynamiclib -I"$build/downloads" "$root/tests/openrsync/peer.m" \
+xcrun --sdk iphonesimulator clang -target "$target" -dynamiclib -I"$build/downloads" "$root/tests/openrsync/peer.m" \
   -F"$app/Frameworks" -framework ios_system -framework Foundation \
   -Wl,-install_name,@rpath/peer.framework/peer -o "$app/Frameworks/peer.framework/peer"
 cat > "$app/Frameworks/peer.framework/Info.plist" <<'PLIST'

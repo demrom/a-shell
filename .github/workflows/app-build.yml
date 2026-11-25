@@ -16,6 +16,28 @@ permissions:
   contents: read
 
 jobs:
+  host-tests:
+    name: App host regressions
+    runs-on: ${{ inputs.runner || 'macos-26-intel' }}
+    timeout-minutes: 10
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
+        id: setup
+        with:
+          version: '0.11.21'
+      - name: Framework staging and checksum rejection
+        run: bash tests/app-frameworks.sh
+      - name: Photos command contract
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: sh tests/photos-host.sh
+      - name: iCloud download wait and cancellation
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: bash tests/cloud-download-wait.sh
   build:
     name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: ${{ inputs.runner || 'macos-26-intel' }}
@@ -39,6 +61,7 @@ jobs:
           xcodebuild -version
           uv run ci/build-app.py package --check
       - name: Build unsigned app from pinned frameworks
+        id: app-build
         shell: bash
         env:
           SCHEME: ${{ matrix.scheme }}
@@ -48,6 +71,29 @@ jobs:
           uv run ci/build-app.py build "$SCHEME" "$PLATFORM" || status=$?
           cp "$GITHUB_STEP_SUMMARY" "$RUNNER_TEMP/app-build-summary.md"
           exit "$status"
+      - name: Check Photos picker linkage in the built app
+        shell: bash
+        env:
+          SCHEME: ${{ matrix.scheme }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          sdk=iphoneos
+          if [[ "$PLATFORM" == simulator ]]; then sdk=iphonesimulator; fi
+          app=".build/app/$SCHEME-$PLATFORM/Build/Products/Debug-$sdk/$SCHEME.app"
+          binary="$app/$SCHEME"
+          if [[ -f "$binary.debug.dylib" ]]; then binary="$binary.debug.dylib"; fi
+          sh tests/photos-link.sh "$binary"
+      - name: Exercise command URL logging on Simulator
+        if: ${{ !cancelled() && steps.app-build.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' && matrix.platform == 'simulator' }}
+        shell: bash
+        run: |
+          axe_dir="$RUNNER_TEMP/axe"
+          mkdir -p "$axe_dir"
+          archive="$axe_dir/AXe-macOS-v2.1.1-universal.tar.gz"
+          curl --fail --location --retry 3 'https://github.com/cameroncooke/AXe/releases/download/v2.1.1/AXe-macOS-v2.1.1-universal.tar.gz' --output "$archive"
+          printf '%s  %s\n' 8788838b1b32059d143cf06541b72fcaead85c16274457cdbff086510a5b17fa "$archive" | shasum -a 256 -c -
+          tar -xzf "$archive" -C "$axe_dir"
+          PATH="$axe_dir:$PATH" bash tests/url-logging/run.sh .build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:

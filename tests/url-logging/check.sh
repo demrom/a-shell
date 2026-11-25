@@ -1,12 +1,26 @@
 #!/bin/sh
 # Host-side regression through the app's public command URL scheme.
 set -eu
-if [ "$#" -ne 2 ]; then
-    printf 'usage: sh check.sh SIMULATOR_UDID APP_BUNDLE_ID\n' >&2
+if [ "$#" -lt 2 ] || [ "$#" -gt 3 ] || { [ "$#" -eq 3 ] && [ "$3" != --confirm-open ]; }; then
+    printf 'usage: sh check.sh SIMULATOR_UDID APP_BUNDLE_ID [--confirm-open]\n' >&2
     exit 64
 fi
 udid=$1
 bundle=$2
+confirm=${3:-}
+if [ -n "$confirm" ]; then
+    command -v axe >/dev/null
+    command -v jq >/dev/null
+    data=$(xcrun simctl list devices -j | jq -er --arg id "$udid" '.devices[][] | select(.udid == $id) | .dataPath')
+    language=$(plutil -extract AppleLanguages.0 raw -o - "$data/Library/Preferences/.GlobalPreferences.plist")
+    case "$language" in
+        en|en-*) ;;
+        *) printf 'The unattended confirmation requires an English Simulator.\n' >&2; exit 64 ;;
+    esac
+    app=$(xcrun simctl get_app_container "$udid" "$bundle" app)
+    name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Info.plist")
+    prompt='Open in “'"$name"'”?'
+fi
 container=$(xcrun simctl get_app_container "$udid" "$bundle" data)
 receipt="$container/Documents/url-logging-$$.txt"
 trap 'rm -f "$receipt"' EXIT
@@ -20,6 +34,12 @@ while [ "$attempt" -lt 100 ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
         printf 'FAIL: app exited while opening a URL containing %%s\n' >&2
         exit 1
+    fi
+    if [ -n "$confirm" ] && [ "$((attempt % 5))" -eq 0 ] &&
+        axe describe-ui --udid "$udid" | jq -e --arg prompt "$prompt" \
+            'any(.. | objects; .type == "Sheet" and .AXLabel == $prompt)' >/dev/null; then
+        axe tap --udid "$udid" --element-type Button --label Open >/dev/null
+        confirm=
     fi
     if [ -s "$receipt" ]; then
         actual=$(cat "$receipt")

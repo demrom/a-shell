@@ -9,6 +9,8 @@ on:
       - '.github/workflows/pico-framework.yml'
   workflow_dispatch:
   push:
+    branches:
+      - 'ci/native-pico*'
     tags:
       - 'pico-v*'
 permissions:
@@ -18,7 +20,7 @@ defaults:
     shell: bash
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: macos-26-intel
     timeout-minutes: 60
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
@@ -40,7 +42,7 @@ jobs:
           unzip -q "$build/dist/pico.xcframework.zip" -d "$build/runtime-input"
           cp -R "$build/runtime-input/pico.xcframework/ios-arm64_x86_64-simulator/pico.framework" "$frameworks/"
           cp -R "$build/dependencies/ios_system.xcframework/ios-arm64_x86_64-simulator/ios_system.framework" "$frameworks/"
-          xcrun --sdk iphonesimulator clang -target arm64-apple-ios14.0-simulator -fobjc-arc tests/pico/main.m \
+          xcrun --sdk iphonesimulator clang -target "$(uname -m)-apple-ios14.0-simulator" -fobjc-arc tests/pico/main.m \
             -F"$frameworks" -framework ios_system -framework Foundation \
             -Wl,-rpath,@executable_path/Frameworks -o "$app/pico-runtime"
           cat > "$app/Info.plist" <<'PLIST'

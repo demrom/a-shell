@@ -1,6 +1,6 @@
 # App build matrix
 
-`.github/workflows/app-build.yml` builds the existing `a-Shell-noPython`, `a-Shell-mini` and `a-Shell` targets for generic iOS (arm64) and iOS Simulator (arm64 and x86_64 in the same app). These are unsigned compile, link and architecture checks, not signing, installation or runtime tests. Use a `ci/app-build-*` branch for a fork run without updating its default branch. CI defaults to `macos-26-intel`; a manual dispatch can set `runner` to `macos-26` to use an Arm64 host instead. This does not change the app architectures.
+`.github/workflows/app-build.yml` builds the existing `a-Shell-noPython`, `a-Shell-mini` and `a-Shell` targets for generic iOS (arm64) and iOS Simulator (arm64 and x86_64 in the same app). The matrix builds unsigned apps, checks their executable architectures and verifies PhotosUI linkage. The noPython Simulator job then ad hoc signs a copy of the built app and checks the public command URL callback; it does not qualify signing or behavior on a physical device. A separate host job runs the staging, Photos and iCloud download regressions. Use a `ci/app-build-*` branch for a fork run without updating its default branch. CI defaults to `macos-26-intel`; a manual dispatch can set `runner` to `macos-26` to use an Arm64 host instead. This does not change the app architectures.
 
 Use Xcode 26.6 and uv from a clean, dedicated checkout:
 
@@ -24,4 +24,4 @@ uv run ci/build-app.py package > xcfs/Package.swift
 uv run ci/build-app.py package --check
 ```
 
-Run `bash tests/app-frameworks.sh` to check the staging CLI's missing-input summary, universal Simulator fallback, rerun and checksum failure behavior without network downloads.
+Run `bash tests/app-frameworks.sh` to check the staging CLI's missing-input summary, universal Simulator fallback, rerun and checksum failure behavior without network downloads. For the post-build URL check and its local invocation, see [URL logging](../tests/url-logging/README.md).
