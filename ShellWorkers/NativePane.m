@@ -611,7 +611,7 @@ int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, un
         }
         int expected = 0;
         if (!atomic_compare_exchange_strong(&pane_in_flight, &expected, 1)) return EBUSY;
-        int error = ENOMEM, peer = -1, child = -1, err_child = -1;
+        int error = ENOMEM, peer = -1;
         pane_job *job = calloc(1, sizeof(*job));
         if (!job) { atomic_store(&pane_in_flight, 0); return ENOMEM; }
         job->peer_control = -1;
@@ -660,11 +660,11 @@ int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, un
         }
         if (!wants_pty && socketpair(AF_UNIX, SOCK_STREAM, 0, fds)) { error = errno; goto failed; }
         peer = fds[0];
-        child = fds[1];
+        int child = fds[1];
         if (job->is_pty) {
             struct termios settings;
-            if (tcgetattr(child, &settings)) { error = errno; goto failed; }
-            if (settings.c_cc[VEOF] == _POSIX_VDISABLE) { error = ENOTSUP; goto failed; }
+            if (tcgetattr(child, &settings)) { error = errno; close(child); goto failed; }
+            if (settings.c_cc[VEOF] == _POSIX_VDISABLE) { error = ENOTSUP; close(child); goto failed; }
             job->eof_key = settings.c_cc[VEOF];
             // Commands share an application process: never enable kernel process-group signals.
             settings.c_lflag &= ~ISIG;
@@ -675,12 +675,13 @@ int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, un
             error = socket_options(peer);
             if (!error) error = socket_options(child);
         }
-        if (error) goto failed;
+        if (error) { close(child); goto failed; }
         job->peer_control = dup(peer);
-        if (job->peer_control < 0) { error = errno; goto failed; }
+        if (job->peer_control < 0) { error = errno; close(child); goto failed; }
         error = job->is_pty ? (fcntl(job->peer_control, F_SETFD, FD_CLOEXEC) ? errno : 0) : socket_options(job->peer_control);
         if (!error && job->is_pty && fcntl(peer, F_SETFD, FD_CLOEXEC)) error = errno;
-        if (error) goto failed;
+        if (error) { close(child); goto failed; }
+        int err_child = -1;
         if (options->separate_stderr) {
             int pair[2];
             if (socketpair(AF_UNIX, SOCK_STREAM, 0, pair)) { error = errno; goto failed; }
@@ -688,13 +689,11 @@ int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, un
             err_child = pair[1];
             error = socket_options(peer_err);
             if (!error) error = socket_options(err_child);
-            if (error) goto failed;
+            if (error) { close(err_child); goto failed; }
         }
         for (int i = 0; i < 3; i++) {
-            int fd = i == 0 ? child : i == 2 && err_child >= 0 ? err_child : dup(fileno(job->streams[0]));
+            int fd = i == 0 ? child : i == 2 && err_child >= 0 ? err_child : dup(child);
             if (fd < 0) { error = errno; goto failed; }
-            if (i == 0) child = -1;
-            if (i == 2) err_child = -1;
             job->streams[i] = fdopen(fd, i == 0 ? "r" : "w");
             if (!job->streams[i]) { error = errno; close(fd); goto failed; }
             if (fcntl(fd, F_SETFD, FD_CLOEXEC)) { error = errno; goto failed; }
@@ -730,8 +729,6 @@ int ashell_pane_spawn_ex(const char *command, const char *cwd, unsigned cols, un
         *job_out = job;
         return 0;
 failed:
-        if (child >= 0) close(child);
-        if (err_child >= 0) close(err_child);
         close_streams(job);
         if (peer >= 0) close(peer);
         if (peer_err >= 0) close(peer_err);

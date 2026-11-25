@@ -25,15 +25,12 @@ enum TerminalFonts {
             current[file] = values.contentModificationDate ?? .distantPast
         }
         var errors: [String] = []
-        for (file, date) in registered where current[file] != date {
+        for (file, date) in registered where current[file] != nil && current[file] != date {
             let result = changeRegistration(file, register: false)
             errors += result
             if result.isEmpty { registered.removeValue(forKey: file) }
         }
         for (file, date) in current where registered[file] != date {
-            let faces = faceNames(in: file)
-            // Do not take ownership of a face already supplied by another source.
-            if !faces.isEmpty && faces.allSatisfy({ font(named: $0, size: 13) != nil }) { continue }
             let result = changeRegistration(file, register: true)
             errors += result
             if result.isEmpty { registered[file] = date }

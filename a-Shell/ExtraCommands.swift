@@ -1255,7 +1255,7 @@ public func deletemark(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
 }
 
 @discardableResult
-func downloadRemoteFileFromCloud(fileURL: URL, waitForDownload: Bool = true, reportErrors: Bool = false) -> Bool {
+func downloadRemoteFileFromCloud(fileURL: URL, waitForDownload: Bool = true) -> Bool {
     var target = fileURL
     let name = fileURL.lastPathComponent
     // Strip only the placeholder wrapper, preserving dots in the original name.
@@ -1277,13 +1277,13 @@ func downloadRemoteFileFromCloud(fileURL: URL, waitForDownload: Bool = true, rep
             target.removeAllCachedResourceValues()
             let state = try? target.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey, .ubiquitousItemDownloadingErrorKey])
             if let error = state?.ubiquitousItemDownloadingError { throw error }
-            if state?.ubiquitousItemDownloadingStatus == .current {
+            if state?.ubiquitousItemDownloadingStatus == .current || state?.ubiquitousItemDownloadingStatus == .downloaded {
                 return true
             }
             usleep(50_000)
         }
     } catch {
-        if reportErrors {
+        if waitForDownload {
             fputs("\(target.path): \(error.localizedDescription)\n", thread_stderr)
         } else {
             NSLog("Could not start iCloud download: \(error.localizedDescription)")
@@ -1322,16 +1322,14 @@ public func downloadFile(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePo
         break
     }
     guard !paths.isEmpty else { fputs(usage, thread_stderr); return 1 }
+    let previousStatus = ios_getCommandStatus()
     if waitForDownload { set_session_errno(130) }
+    defer { if waitForDownload { set_session_errno(previousStatus) } }
     var succeeded = true
     for path in paths {
-        if !downloadRemoteFileFromCloud(fileURL: URL(fileURLWithPath: path), waitForDownload: false, reportErrors: true) {
+        if !downloadRemoteFileFromCloud(fileURL: URL(fileURLWithPath: path), waitForDownload: waitForDownload) {
+            if !waitForDownload { fputs("downloadFile: could not start download: \(path)\n", thread_stderr) }
             succeeded = false
-        }
-    }
-    if waitForDownload && succeeded {
-        for path in paths {
-            if !downloadRemoteFileFromCloud(fileURL: URL(fileURLWithPath: path), waitForDownload: true, reportErrors: true) { succeeded = false }
         }
     }
     return succeeded ? 0 : 1
@@ -1365,23 +1363,21 @@ public func downloadFolder(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutable
         break
     }
     if paths.isEmpty { paths = ["."] }
+    let previousStatus = ios_getCommandStatus()
     if waitForDownload { set_session_errno(130) }
+    defer { if waitForDownload { set_session_errno(previousStatus) } }
     var succeeded = true
     for path in paths {
-        if !downloadFilesFromRemoteFolder(fileURL: URL(fileURLWithPath: path), recursive: recursive, waitForDownload: false, reportErrors: true) {
+        if !downloadFilesFromRemoteFolder(fileURL: URL(fileURLWithPath: path), recursive: recursive, waitForDownload: waitForDownload) {
+            if !waitForDownload { fputs("downloadFolder: could not start all downloads: \(path)\n", thread_stderr) }
             succeeded = false
-        }
-    }
-    if waitForDownload && succeeded {
-        for path in paths {
-            if !downloadFilesFromRemoteFolder(fileURL: URL(fileURLWithPath: path), recursive: recursive, waitForDownload: true, reportErrors: true) { succeeded = false }
         }
     }
     return succeeded ? 0 : 1
 }
 
 @discardableResult
-func downloadFilesFromRemoteFolder(fileURL: URL, recursive: Bool = false, waitForDownload: Bool = true, reportErrors: Bool = false) -> Bool {
+func downloadFilesFromRemoteFolder(fileURL: URL, recursive: Bool = false, waitForDownload: Bool = true) -> Bool {
     do {
         let keys: Set<URLResourceKey> = [.isDirectoryKey, .isSymbolicLinkKey, .isUbiquitousItemKey]
         let urls = try FileManager.default.contentsOfDirectory(at: fileURL, includingPropertiesForKeys: Array(keys), options: [])
@@ -1393,13 +1389,13 @@ func downloadFilesFromRemoteFolder(fileURL: URL, recursive: Bool = false, waitFo
                 let name = myURL.lastPathComponent
                 let placeholder = name.count > 8 && name.hasPrefix(".") && name.hasSuffix(".icloud")
                 if values.isDirectory != true && (placeholder || values.isUbiquitousItem == true) {
-                    if !downloadRemoteFileFromCloud(fileURL: myURL, waitForDownload: waitForDownload, reportErrors: reportErrors) { succeeded = false }
+                    if !downloadRemoteFileFromCloud(fileURL: myURL, waitForDownload: waitForDownload) { succeeded = false }
                 }
                 if recursive && values.isDirectory == true {
-                    if !downloadFilesFromRemoteFolder(fileURL: myURL, recursive: true, waitForDownload: waitForDownload, reportErrors: reportErrors) { succeeded = false }
+                    if !downloadFilesFromRemoteFolder(fileURL: myURL, recursive: true, waitForDownload: waitForDownload) { succeeded = false }
                 }
             } catch {
-                if reportErrors {
+                if waitForDownload {
                     fputs("downloadFolder: \(myURL.path): \(error.localizedDescription)\n", thread_stderr)
                 } else {
                     NSLog("Could not inspect iCloud item: \(error.localizedDescription)")
@@ -1409,7 +1405,7 @@ func downloadFilesFromRemoteFolder(fileURL: URL, recursive: Bool = false, waitFo
         }
         return succeeded
     } catch {
-        if reportErrors {
+        if waitForDownload {
             fputs("downloadFolder: \(fileURL.path): \(error.localizedDescription)\n", thread_stderr)
         } else {
             NSLog("Could not enumerate iCloud folder: \(error.localizedDescription)")
@@ -1632,7 +1628,7 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
                     try writePhotoResource(resource, to: file)
                     let attributes = try manager.attributesOfItem(atPath: file.path)
                     files[names[offset]] = (attributes[.size] as? NSNumber)?.uint64Value
-                    try manager.setAttributes([.posixPermissions: 0o400], ofItemAtPath: file.path)
+                    try manager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: file.path)
                 }
                 if manager.fileExists(atPath: destination.path) { try removePhotoCacheItem(destination) }
                 try manager.moveItem(at: stage, to: destination)
@@ -2214,15 +2210,14 @@ public func storeInteractive() -> Int32 {
         return 0
     }
     var returnValue: Int32 = 0
-    let readMode = {
+    DispatchQueue.main.async {
         if let delegate = currentDelegate {
-            returnValue = delegate.interactiveCommandRunning ? 1 : 0
+            if delegate.interactiveCommandRunning {
+                returnValue = 1
+            } else {
+                returnValue = 0
+            }
         }
-    }
-    if Thread.isMainThread {
-        readMode()
-    } else {
-        DispatchQueue.main.sync(execute: readMode)
     }
     return returnValue
 }
