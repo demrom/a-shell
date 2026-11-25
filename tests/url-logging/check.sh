@@ -8,6 +8,11 @@ fi
 udid=$1
 bundle=$2
 confirm=${3:-}
+scheme=${ASHELL_TEST_URL_SCHEME:-ashellmini}
+case "$scheme" in
+    ashell|ashellmini) ;;
+    *) printf 'Unknown app URL scheme: %s\n' "$scheme" >&2; exit 64 ;;
+esac
 if [ -n "$confirm" ]; then
     command -v axe >/dev/null
     command -v jq >/dev/null
@@ -28,7 +33,7 @@ launch=$(xcrun simctl launch "$udid" "$bundle")
 pid=${launch##*: }
 # %25s decodes to literal %s in the command, rather than a logging format.
 literal='URI_LOG_%s_OK'
-xcrun simctl openurl "$udid" "ashellmini:echo%20URI_LOG_%25s_OK%20%3E%20$receipt"
+xcrun simctl openurl "$udid" "$scheme:echo%20URI_LOG_%25s_OK%20%3E%20$receipt"
 attempt=0
 ui_errors=0
 while [ "$attempt" -lt 100 ]; do
