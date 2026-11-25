@@ -9,7 +9,7 @@ on:
       - 'Resources/commandDictionary.plist'
       - '.github/workflows/cbc-framework.yml'
   push:
-    branches: [ci/cbc-framework]
+    branches: [ci/cbc-framework, ci/cbc-framework-red]
   workflow_dispatch:
 
 permissions:
