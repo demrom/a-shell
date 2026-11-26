@@ -129,6 +129,11 @@ jobs:
           plutil -insert UIAppFonts -json '["Fixture.ttf"]' "$copy/Info.plist"
           bash tests/simulator-app.sh "$copy" tests/simulator-app-commands.sh bundled-font "$font" || status=$?
           exit "$status"
+      - name: Copy rendered terminal output through the native toolbar
+        if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
+        run: |
+          app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
+          bash tests/simulator-app.sh "$app" tests/simulator-toolbar-copy.sh
       - name: Check interactive terminal state through the native callback
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-noPython' }}
         run: bash tests/simulator-interactive-state.sh .build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
