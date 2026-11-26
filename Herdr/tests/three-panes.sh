@@ -12,7 +12,10 @@ command -v axe >/dev/null
 command -v jq >/dev/null
 data=$(xcrun simctl get_app_container "$sim" "$bundle" data)
 app=$(xcrun simctl get_app_container "$sim" "$bundle" app)
+fixtures=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 receipts=$(mktemp -d "$data/Documents/herdr-ui.XXXXXX")
+cp "$fixtures/native-cpu.awk" "$fixtures/native-cpu-pane.sh" "$receipts/"
+mkdir "$receipts/"{a,b,c}-cpu
 steps=$(mktemp)
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
 # shellcheck disable=SC2329
@@ -114,6 +117,12 @@ for pane in a b c; do
 			failed=1
 		fi
 	fi
+	if [[ $failed == 0 ]]; then
+		printf -v command 'sh ~/Documents/%s/native-cpu-pane.sh %s %s' "${receipts##*/}" "$pane" "${receipts##*/}"
+		type_command "$command" >"$steps"
+		axe batch --udid "$sim" --file "$steps" >/dev/null
+		wait_output "$receipts/$pane-cpu/ready"
+	fi
 done
 if [ "${#pids[@]}" -ne 3 ]; then
 	echo 'did not get three pane receipts' >&2
@@ -134,7 +143,41 @@ for pid in "${pids[@]+${pids[@]}}"; do
 		;;
 	esac
 done
-if [ "$failed" -eq 0 ]; then printf 'three concurrent workers: %s %s %s\n' "${pids[@]}"; fi
+if [ "$failed" -eq 0 ]; then
+	printf 'three concurrent workers: %s %s %s\n' "${pids[@]}"
+	monotonic_seconds() { perl -MTime::HiRes=clock_gettime,CLOCK_MONOTONIC -e 'printf "%.6f\n", clock_gettime(CLOCK_MONOTONIC)'; }
+	worker_cpu_seconds() { LC_ALL=C ps -p "$1" -o time= | awk -F: 'NF != 2 {exit 1} {printf "%.2f\n", $1*60+$2}'; }
+	before=()
+	start=$(monotonic_seconds)
+	for pid in "${pids[@]}"; do before+=("$(worker_cpu_seconds "$pid")"); done
+	touch "$receipts/start"
+	for ((attempt=0; attempt<240; attempt++)); do
+		if [[ -s $receipts/a-cpu/finished && -s $receipts/b-cpu/finished && -s $receipts/c-cpu/finished ]]; then break; fi
+		sleep 0.5
+	done
+	if [[ $attempt == 240 ]]; then echo 'Three native AWK workloads did not finish' >&2; exit 1; fi
+	deltas=()
+	index=0
+	for pane in a b c; do
+		pid=${pids[index]}
+		after=$(worker_cpu_seconds "$pid")
+		deltas+=("$(awk -v a="$after" -v b="${before[index]}" 'BEGIN {print a-b}')")
+		cmp "$receipts/$pane-cpu/ready" "$receipts/$pane-cpu/finished"
+		[[ $(head -1 "$receipts/$pane-cpu/finished") == "$pid" ]]
+		grep -Fqx "$pane-cpu" "$receipts/$pane-cpu/relative.txt"
+		awk -v pane="$pane-cpu" 'NR==2 && $0 !~ ("/" pane "$") {exit 1} NR==3 && $0!=pane {exit 1} END {if (NR!=3) exit 1}' "$receipts/$pane-cpu/finished"
+		awk 'NR!=1 || $1<1.99999e16 || $1>2.00001e16 {exit 1} END {if (NR!=1) exit 1}' "$receipts/$pane-cpu/result"
+		index=$((index+1))
+	done
+	end=$(monotonic_seconds)
+	awk -v a="${deltas[0]}" -v b="${deltas[1]}" -v c="${deltas[2]}" -v start="$start" -v end="$end" 'BEGIN {
+		# Each ps reading rounds to centiseconds; bound the aggregate downward.
+		cpu = a+b+c-0.06; wall = end-start
+		passed = a>0 && b>0 && c>0 && cpu>wall
+		printf "HERDR_CPU_OVERLAP_%s workers=3 cpu_lower=%.2f wall_upper=%.2f\n", passed ? "PASS" : "FAIL", cpu, wall
+		exit !passed
+	}'
+fi
 
 # Leave the real shell usable and prove same-process command re-entry.
 printf 'key-combo --modifiers 224 --key 5\nsleep 0.4\ntype q\nsleep 3\n' >"$steps"
