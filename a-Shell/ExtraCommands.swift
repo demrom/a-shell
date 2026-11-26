@@ -1565,7 +1565,9 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
         var rootValues = URLResourceValues()
         rootValues.isExcludedFromBackup = true
         try root.setResourceValues(rootValues)
-        let assets = allowed ? PHAsset.fetchAssets(with: nil) : PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
+        let stillImages = PHFetchOptions()
+        stillImages.predicate = NSPredicate(format: "mediaType != %d", PHAssetMediaType.video.rawValue)
+        let assets = allowed ? PHAsset.fetchAssets(with: stillImages) : PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
         var visible = Set<String>()
         for i in 0..<assets.count { visible.insert(photoCacheName(assets.object(at: i).localIdentifier)) }
         // Prune before downloading so a failed network request cannot retain revoked assets.
