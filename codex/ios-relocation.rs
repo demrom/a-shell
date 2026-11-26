@@ -93,11 +93,6 @@ fn apple_container(root: &Path) -> bool {
             return tail(relative);
         }
     }
-    if let Some((_, relative)) = value.split_once("/Library/Developer/CoreSimulator/Devices/")
-        && let Some((device, relative)) = relative.split_once("/data/Containers/")
-    {
-        return uuid(device) && tail(relative);
-    }
     false
 }
 
