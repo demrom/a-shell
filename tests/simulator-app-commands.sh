@@ -26,6 +26,8 @@ case $mode in
     *) printf 'Unknown app fixture mode: %s\n' "$mode" >&2; exit 2 ;;
 esac
 
+# Start the system Photos service before the first permission prompt.
+if [[ $mode == photos ]]; then xcrun simctl launch "$sim" com.apple.mobileslideshow; fi
 # First contact may display the public Open-in confirmation. The existing URL
 # consumer handles it, then ordinary calls use the same authorized route.
 bash "$root/url-logging/check.sh" "$sim" "$bundle" --confirm-open
@@ -85,15 +87,30 @@ if [[ $mode == photos ]]; then
         command -v ffprobe >/dev/null
         xcrun simctl addmedia "$sim" "$video"
     fi
-    xcrun simctl privacy "$sim" grant photos "$bundle"
-    # TCC can stop the old app while changing its grant. Track the new writer.
     pin_stream_writer
+    allow_photo_access() {
+        local attempt tree coords x y
+        for ((attempt=0; attempt<90; attempt++)); do
+            if tree=$(axe describe-ui --udid "$sim" --minimal-keys 2>/dev/null) && coords=$(jq -er '
+                [.. | objects | select(.type == "Button" and .enabled == true and .AXLabel == "Allow Full Access") |
+                    [.frame.x + .frame.width / 2, .frame.y + .frame.height / 2] | map(floor)] | unique |
+                    select(length == 1) | first | @tsv' <<< "$tree"); then
+                IFS=$'\t' read -r x y <<< "$coords"
+                axe tap --udid "$sim" -x "$x" -y "$y"
+                return
+            fi
+            sleep 0.5
+        done
+        printf 'Photos did not show the system full-access prompt\n' >&2
+        return 1
+    }
     sync_photos() {
-        local output="$work/$1" errors="$work/$2" command count
+        local output="$work/$1" errors="$work/$2" grant=${3:-false} command count
         # The URL route returns no command exit code. Every nonzero exit of
         # this Photos sync writes stderr; check it only after both streams close.
         printf -v command 'photos > %q 2> %q' "$output" "$errors"
         open_command "$command"
+        if [[ $grant == true ]]; then allow_photo_access; fi
         for ((count=0; count<640; count++)); do
             kill -0 "$app_pid" || return 1
             if [[ -f $output && -f $errors && ( -s $output || -s $errors ) ]] && streams_closed "$output" "$errors"; then
@@ -111,7 +128,7 @@ if [[ $mode == photos ]]; then
         jq -esS 'select(length == 1) | .[0] | select(type == "object" and length > 0 and all(.[]; .files | type == "object"))' \
             "$documents/Photos/.photos-index.json" > "$work/$1-index.json"
     }
-    sync_photos photos-root.txt photos-first.err
+    sync_photos photos-root.txt photos-first.err true
     (cd "$work" && HOME="$container" sh "$root/photos.sh" before)
     snapshot_index before
     cached=$(find "$documents/Photos" -type f -exec cmp -s "$input" {} \; -print -quit)
