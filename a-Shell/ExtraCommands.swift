@@ -1577,14 +1577,14 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
                 usleep(50_000)
             }
         }
-        let assets = allowed ? PHAsset.fetchAssets(with: nil) : PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
+        let stillImages = PHFetchOptions()
+        stillImages.predicate = NSPredicate(format: "mediaType != %d", PHAssetMediaType.video.rawValue)
+        let assets = allowed ? PHAsset.fetchAssets(with: stillImages) : PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
         var visible = Set<String>()
         for i in 0..<assets.count { visible.insert(photoCacheName(assets.object(at: i).localIdentifier)) }
         // Prune before downloading so a failed network request cannot retain revoked assets.
         for child in try manager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) {
-            let name = child.lastPathComponent
-            let assetDirectory = name.count == 64 && name.allSatisfy { "0123456789abcdef".contains($0) }
-            if (assetDirectory && !visible.contains(name)) || name.hasPrefix(".photos-stage-") {
+            if child.lastPathComponent.hasPrefix(".photos-stage-") {
                 try removePhotoCacheItem(child)
             }
         }
