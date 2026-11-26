@@ -1,0 +1,34 @@
+name: Codex thread-store tests
+
+on:
+  pull_request:
+    paths: ['codex/**', '.github/workflows/codex-runtime-tests.yml']
+  push:
+    branches: ['ci/codex-runtime-tests-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  relocation:
+    runs-on: macos-26-intel
+    timeout-minutes: 60
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Select the pinned toolchains
+        run: |
+          xcodebuild -version | grep -Fx 'Xcode 26.6'
+          rustup toolchain install 1.96.1 --profile minimal
+      - name: Exercise the public thread-store relocation API
+        run: bash codex/tests/relocation.sh "$RUNNER_TEMP/codex-relocation"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: codex-relocation-log
+          path: ${{ runner.temp }}/codex-relocation/relocation.log
+          if-no-files-found: ignore
