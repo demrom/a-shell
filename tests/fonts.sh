@@ -18,8 +18,14 @@ font_contract() {
     mv ~/Documents/Fonts/Fixture.ttf ~/Documents/Fixture.ttf.saved || return 1
     config --fonts > ~/Documents/fonts-removed-list.txt 2> ~/Documents/fonts-removal-errors.txt
     removal_status=0
-    if grep -q '^JetBrainsMonoNFM-Regular$' ~/Documents/fonts-removed-list.txt; then removal_status=1; fi
-    if config -n JetBrainsMonoNFM-Regular 2>> ~/Documents/fonts-removal-errors.txt; then removal_status=1; fi
+    if grep -q '^JetBrainsMonoNFM-Regular$' ~/Documents/fonts-removed-list.txt; then
+        printf '%s\n' 'config --fonts still lists JetBrainsMonoNFM-Regular after removing Fixture.ttf' >&2
+        removal_status=1
+    fi
+    if config -n JetBrainsMonoNFM-Regular 2>> ~/Documents/fonts-removal-errors.txt; then
+        printf '%s\n' 'config still selects JetBrainsMonoNFM-Regular after removing Fixture.ttf' >&2
+        removal_status=1
+    fi
     mv ~/Documents/Fixture.ttf.saved ~/Documents/Fonts/Fixture.ttf || return 1
     config --fonts > ~/Documents/fonts-restored-list.txt 2> ~/Documents/fonts-restore-errors.txt
     config -n JetBrainsMonoNFM-Regular --show > ~/Documents/fonts-restored.txt || return 1
