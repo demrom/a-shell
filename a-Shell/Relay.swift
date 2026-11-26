@@ -583,7 +583,7 @@ final class RelayServer {
                 Self.refusingCommands = true
                 Self.executionLock.unlock()
                 self.queue.async {
-                    self.send(connection, status: 413, text: Self.outputLimitMessage)
+                    self.send(connection, status: 500, text: Self.outputLimitMessage)
                     for waiting in self.queuedConnections {
                         self.send(waiting, status: 503, text: "previous command is still stopping after output overflow\n")
                     }
