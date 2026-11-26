@@ -25,7 +25,7 @@ finish() {
 		xcrun simctl spawn "$sim" log show --last 5m --style compact \
 			--predicate 'process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")' \
 			| tail -25 >&2 || true
-		for name in a a-after-idle b c detached reentry; do
+		for name in a a-after-idle b c eof.out eof.status eof.worker eof.next detached reentry; do
 			if [[ -f $receipts/$name ]]; then
 				printf 'receipt %s:\n' "$name" >&2
 				tail -4 "$receipts/$name" >&2
@@ -177,6 +177,30 @@ if [ "$failed" -eq 0 ]; then
 		printf "HERDR_CPU_OVERLAP_%s workers=3 cpu_lower=%.2f wall_upper=%.2f\n", passed ? "PASS" : "FAIL", cpu, wall
 		exit !passed
 	}'
+
+	# Idle Ctrl-D is Delete. Foreground Ctrl-D ends only cat's input.
+	{
+		printf 'key-combo --modifiers 224 --key 7\nsleep 0.5\n'
+		printf -v command 'cat > ~/Documents/%s/eof.out' "${receipts##*/}"
+		type_command "$command"
+		type_command 'EOF_FOREGROUND_BYTES'
+		printf 'key-combo --modifiers 224 --key 7\nsleep 1\n'
+		# Expand the preceding command status in the installed worker shell.
+		# shellcheck disable=SC2016
+		printf -v command 'echo $? > ~/Documents/%s/eof.status' "${receipts##*/}"
+		type_command "$command"
+		printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/eof.worker' "${receipts##*/}"
+		type_command "$command"
+		printf -v command 'echo EOF_FOLLOWUP > ~/Documents/%s/eof.next' "${receipts##*/}"
+		type_command "$command"
+	} >"$steps"
+	axe batch --udid "$sim" --file "$steps" >/dev/null
+	wait_output "$receipts/eof.next"
+	printf 'EOF_FOREGROUND_BYTES\n' | cmp - "$receipts/eof.out"
+	printf '0\n' | cmp - "$receipts/eof.status"
+	cmp "$receipts/c" "$receipts/eof.worker"
+	printf 'EOF_FOLLOWUP\n' | cmp - "$receipts/eof.next"
+	printf 'HERDR_COMMAND_EOF_PASS worker=%s\n' "${pids[2]}"
 fi
 
 # Leave the real shell usable and prove same-process command re-entry.
