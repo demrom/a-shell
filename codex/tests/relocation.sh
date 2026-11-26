@@ -8,7 +8,7 @@ work=$(cd "$work" && pwd)
 CODEX_BUILD_CACHE="$work/source" bash "$root/codex/build.sh" prepare
 export CARGO_TARGET_DIR="$work/target"
 cd "$work/source/upstream/codex-rs"
-"${CODEX_RUSTUP:-rustup}" run 1.96.1 cargo test --locked -p codex-rollout -p codex-thread-store --lib ios_relocation 2>&1 | tee "$work/relocation.log"
+"${CODEX_RUSTUP:-rustup}" run 1.96.1 cargo test --locked --no-fail-fast -p codex-rollout -p codex-thread-store --lib ios_relocation 2>&1 | tee "$work/relocation.log"
 grep -F 'test result: ok. 6 passed; 0 failed;' "$work/relocation.log"
 grep -Fx 'test local::ios_relocation_tests::ios_relocation_public_read_uses_exact_selected_copy_before_rollback ... ok' "$work/relocation.log"
 grep -Fx 'test local::ios_relocation_tests::ios_relocation_public_filtered_resume_restores_workspace ... ok' "$work/relocation.log"
