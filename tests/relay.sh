@@ -60,7 +60,10 @@ for command in "awk 'BEGIN { for (i = 0; i < 1048577; i++) printf \"12345678\" }
     "awk 'BEGIN { while (1) print \"relay-overflow\" > \"/dev/stderr\" }'"; do
     code=$(request --max-time 10 -o "$work/overflow" -w '%{http_code}' \
         -H "X-Token: $RELAY_TOKEN" --data-binary "$command" "$RELAY_URL/run")
-    [ "$code" = 413 ]
+    if [ "$code" != 413 ]; then
+        printf 'Relay overflow expected HTTP 413, got %s\n' "$code" >&2
+        exit 1
+    fi
     cmp "$work/refusal" "$work/overflow"
     request --fail --max-time 2 -H "X-Token: $RELAY_TOKEN" --data-binary 'echo ok' "$RELAY_URL/run" > "$work/next"
     jq -e '.stdout == "ok\n" and .stderr == "" and .status == 0' "$work/next"
