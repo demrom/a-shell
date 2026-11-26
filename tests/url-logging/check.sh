@@ -34,28 +34,31 @@ pid=${launch##*: }
 # %25s decodes to literal %s in the command, rather than a logging format.
 literal='URI_LOG_%s_OK'
 xcrun simctl openurl "$udid" "$scheme:echo%20URI_LOG_%25s_OK%20%3E%20$receipt"
-attempt=0
-ui_errors=0
-while [ "$attempt" -lt 100 ]; do
+deadline=$(($(date +%s) + 120))
+next_ui=0
+prompt_taps=0
+while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! kill -0 "$pid" 2>/dev/null; then
         printf 'FAIL: app exited while opening a URL containing %%s\n' >&2
         exit 1
     fi
-    if [ -n "$confirm" ] && [ ! -s "$receipt" ] && [ "$((attempt % 5))" -eq 4 ]; then
-        if tree=$(axe describe-ui --udid "$udid"); then
-            ui_errors=0
-            if printf '%s\n' "$tree" | jq -e --arg prompt "$prompt" \
-                'any(.. | objects; .type == "Sheet" and .AXLabel == $prompt)' >/dev/null; then
-                axe tap --udid "$udid" --element-type Button --label Open >/dev/null
-                confirm=
-            fi
-        else
-            ui_errors=$((ui_errors + 1))
-            if [ "$ui_errors" -ge 3 ]; then
-                printf 'FAIL: Simulator UI automation failed three times\n' >&2
-                exit 1
+    if [ -n "$confirm" ] && [ ! -s "$receipt" ] && [ "$(date +%s)" -ge "$next_ui" ]; then
+        # SpringBoard can briefly return no accessibility tree. Use the Open
+        # button from this exact sheet, not another global accessibility query.
+        if tree=$(axe describe-ui --udid "$udid") && coords=$(printf '%s\n' "$tree" | jq -er --arg prompt "$prompt" '
+            [.. | objects | select(.type == "Sheet" and .AXLabel == $prompt) |
+                .. | objects | select(.type == "Button" and .AXLabel == "Open" and .enabled == true) |
+                select(.frame.width > 0 and .frame.height > 0) |
+                [.frame.x + .frame.width / 2, .frame.y + .frame.height / 2] | map(floor)] |
+            unique | select(length == 1) | first | @tsv'); then
+            IFS=$(printf '\t') read -r x y <<EOF
+$coords
+EOF
+            if axe tap --udid "$udid" -x "$x" -y "$y" >/dev/null; then
+                prompt_taps=$((prompt_taps + 1))
             fi
         fi
+        next_ui=$(($(date +%s) + 2))
     fi
     if [ -s "$receipt" ]; then
         actual=$(cat "$receipt")
@@ -63,10 +66,9 @@ while [ "$attempt" -lt 100 ]; do
             printf 'FAIL: command output did not preserve literal %%s\n' >&2
             exit 1
         fi
-        logs=$(xcrun simctl spawn "$udid" log show --last 1m --style compact --predicate "processIdentifier == $pid AND composedMessage CONTAINS 'url-logging-$$.txt' AND (composedMessage BEGINSWITH 'Calling openURLContexts with ' OR composedMessage BEGINSWITH 'We received an URL in openURLContexts:')")
+        logs=$(xcrun simctl spawn "$udid" log show --last 10m --style compact --predicate "processIdentifier == $pid AND composedMessage CONTAINS 'url-logging-$$.txt' AND (composedMessage BEGINSWITH 'Calling openURLContexts with ' OR composedMessage BEGINSWITH 'We received an URL in openURLContexts:')")
         if ! printf '%s\n' "$logs" | grep -F 'We received an URL in openURLContexts:' >/dev/null; then
             sleep 0.2
-            attempt=$((attempt + 1))
             continue
         fi
         if ! printf '%s\n' "$logs" | grep -F "$literal" >/dev/null || ! printf '%s\n' "$logs" | grep -F 'URI_LOG_%25s_OK' >/dev/null; then
@@ -78,7 +80,6 @@ while [ "$attempt" -lt 100 ]; do
         exit 0
     fi
     sleep 0.2
-    attempt=$((attempt + 1))
 done
-printf 'FAIL: command receipt timed out\n' >&2
+printf 'FAIL: command receipt or matching log timed out (Open taps: %s)\n' "$prompt_taps" >&2
 exit 1
