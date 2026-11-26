@@ -14,7 +14,7 @@ data=$(xcrun simctl get_app_container "$sim" "$bundle" data)
 app=$(xcrun simctl get_app_container "$sim" "$bundle" app)
 fixtures=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 receipts=$(mktemp -d "$data/Documents/herdr-ui.XXXXXX")
-cp "$fixtures/native-cpu.awk" "$fixtures/native-cpu-pane.sh" "$receipts/"
+cp "$fixtures/native-cpu.awk" "$fixtures/native-cpu-pane.sh" "$fixtures/native-interrupt-pane.sh" "$receipts/"
 mkdir "$receipts/"{a,b,c}-cpu
 steps=$(mktemp)
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
@@ -25,7 +25,7 @@ finish() {
 		xcrun simctl spawn "$sim" log show --last 5m --style compact \
 			--predicate 'process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")' \
 			| tail -25 >&2 || true
-		for name in a a-after-idle b c eof.out eof.status eof.worker eof.next detached reentry; do
+		for name in a a-after-idle b c eof.out eof.status eof.worker eof.next interrupt.ready interrupt.out interrupt.returned interrupt.next detached reentry; do
 			if [[ -f $receipts/$name ]]; then
 				printf 'receipt %s:\n' "$name" >&2
 				tail -4 "$receipts/$name" >&2
@@ -201,6 +201,27 @@ if [ "$failed" -eq 0 ]; then
 	cmp "$receipts/c" "$receipts/eof.worker"
 	printf 'EOF_FOLLOWUP\n' | cmp - "$receipts/eof.next"
 	printf 'HERDR_COMMAND_EOF_PASS worker=%s\n' "${pids[2]}"
+
+	# A nested shell starts a foreground reader. Send Ctrl-C only after
+	# readiness, then type the next line without waiting for a new prompt.
+	printf -v command 'sh ~/Documents/%s/native-interrupt-pane.sh' "${receipts##*/}"
+	type_command "$command" >"$steps"
+	axe batch --udid "$sim" --file "$steps" >/dev/null
+	wait_output "$receipts/interrupt.ready"
+	type_command 'INTERRUPT_FOREGROUND' >"$steps"
+	axe batch --udid "$sim" --file "$steps" >/dev/null
+	wait_output "$receipts/interrupt.out"
+	printf 'INTERRUPT_FOREGROUND\n' | cmp - "$receipts/interrupt.out"
+	test ! -e "$receipts/interrupt.returned"
+	{
+		printf 'key-combo --modifiers 224 --key 6\n'
+		printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/interrupt.next' "${receipts##*/}"
+		type_command "$command"
+	} >"$steps"
+	axe batch --udid "$sim" --file "$steps" >/dev/null
+	wait_output "$receipts/interrupt.next"
+	cmp "$receipts/c" "$receipts/interrupt.next"
+	printf 'HERDR_NESTED_INTERRUPT_PASS worker=%s\n' "${pids[2]}"
 fi
 
 # Leave the real shell usable and prove same-process command re-entry.
