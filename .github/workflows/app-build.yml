@@ -41,7 +41,8 @@ jobs:
   build:
     name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: ${{ inputs.runner || 'macos-26-intel' }}
-    timeout-minutes: ${{ matrix.platform == 'simulator' && 90 || 60 }}
+    # The noPython suite boots independent devices for UI and Photos state.
+    timeout-minutes: ${{ matrix.platform == 'simulator' && (matrix.scheme == 'a-Shell-noPython' && 150 || 90) || 60 }}
     strategy:
       fail-fast: false
       matrix:
