@@ -1542,7 +1542,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                         }
                     }
                 case "copy":
-                    terminalView?.copy(sender)
+                    break
                 case "cut":
                     terminalView?.cut(sender)
                 case "control":
