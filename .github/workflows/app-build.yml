@@ -172,8 +172,13 @@ jobs:
         run: |
           openssl_dir="$(brew --prefix openssl@3)/bin"
           test -x "$openssl_dir/openssl"
+          curl_dir="$(brew --prefix curl)/bin"
+          test -x "$curl_dir/curl" || brew install curl
+          export PATH="$curl_dir:$openssl_dir:$PATH"
+          curl_version=$(curl --version)
+          printf '%s\n' "$curl_version"
+          [[ $curl_version == *OpenSSL/* ]]
           app=.build/app/a-Shell-noPython-simulator/Build/Products/Debug-iphonesimulator/a-Shell-noPython.app
-          export PATH="$openssl_dir:$PATH"
           status=0
           for mode in true false; do
             bash tests/simulator-app.sh "$app" tests/simulator-relay.sh "$mode" || status=$?
