@@ -1,12 +1,5 @@
 name: App native frameworks
-on:
-  pull_request:
-    paths-ignore:
-      - '**.md'
-  workflow_dispatch:
-  push:
-    tags:
-      - 'native-*'
+on: workflow_dispatch
 permissions:
   contents: read
 defaults:
@@ -16,12 +9,14 @@ env:
   DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
 jobs:
   build:
-    runs-on: macos-26
+    runs-on: ${{ matrix.product == 'Herdr' && 'macos-26-intel' || 'macos-26' }}
+    env:
+      DEVELOPER_DIR: ${{ matrix.product == 'Herdr' && '/Applications/Xcode_26.6.app/Contents/Developer' || '/Applications/Xcode_26.3.app/Contents/Developer' }}
     timeout-minutes: 360
     strategy:
       fail-fast: false
       matrix:
-        product: [helix, fd, fzf, navi, gitoxide, Ruff, rg]
+        product: [Herdr, helix, Ruff]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -47,6 +42,16 @@ jobs:
           rustup override set "$version"
           rustup target add --toolchain "$version" aarch64-apple-ios aarch64-apple-ios-sim x86_64-apple-ios
           rustc --version
+      - name: Install Zig 0.16.0 for Herdr
+        if: matrix.product == 'Herdr'
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP"
+          archive=zig-x86_64-macos-0.16.0.tar.xz
+          curl -fLsS --retry 2 "https://ziglang.org/download/0.16.0/$archive" -o "$archive"
+          echo "0387557ed1877bc6a2e1802c8391953baddba76081876301c522f52977b52ba7  $archive" | shasum -a 256 -c -
+          tar -xf "$archive"
+          echo "ZIG=$RUNNER_TEMP/${archive%.tar.xz}/zig" >>"$GITHUB_ENV"
       - name: Toolchain and resources
         run: |
           xcodebuild -version
@@ -132,34 +137,3 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           path: .build/dist/*
-  release:
-    needs: [build, node]
-    if: github.repository == 'holzschu/a-shell' && startsWith(github.ref, 'refs/tags/native-')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: native-*
-          merge-multiple: true
-          path: dist
-      - name: Publish immutable assets
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set -euo pipefail
-          cd dist
-          for product in helix fd fzf navi gitoxide Ruff rg node; do
-            test -s "$product.xcframework.zip"
-            test -s "$product.audit.json"
-            test -s "$product.checksums.txt"
-            test -s "$product.release.md"
-          done
-          test -s node-npm.zip
-          test -s node-fetch.zip
-          cat ./*.checksums.txt > checksums.txt
-          shasum -a 256 -c checksums.txt
-          cat ./*.release.md > release.md
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --latest=false \
-            --title "Native frameworks $GITHUB_REF_NAME" --notes-file release.md ./*.zip checksums.txt ./*.audit.json ./*.sizes.tsv
