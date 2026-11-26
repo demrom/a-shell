@@ -1517,6 +1517,7 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
         }
         authorization = PHPhotoLibrary.authorizationStatus(for: .readWrite)
     }
+    var newlySelected: [String] = []
     if select {
         guard authorization == .limited else {
             fputs("photos: --select requires limited Photos access. Choose limited access in Settings.\n", thread_stderr)
@@ -1535,7 +1536,10 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
                 return
             }
             presented = true
-            PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: controller) { _ in finished.signal() }
+            PHPhotoLibrary.shared().presentLimitedLibraryPicker(from: controller) { identifiers in
+                newlySelected = Array(Set(identifiers))
+                finished.signal()
+            }
         }
         finished.wait()
         guard presented else {
@@ -1565,6 +1569,14 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
         var rootValues = URLResourceValues()
         rootValues.isExcludedFromBackup = true
         try root.setResourceValues(rootValues)
+        if allowed && !newlySelected.isEmpty {
+            // The picker can finish before PhotoKit exposes the new grants.
+            let deadline = DispatchTime.now() + .seconds(5)
+            while PHAsset.fetchAssets(withLocalIdentifiers: newlySelected, options: nil).count < newlySelected.count,
+                  DispatchTime.now() < deadline {
+                usleep(50_000)
+            }
+        }
         let assets = allowed ? PHAsset.fetchAssets(with: nil) : PHAsset.fetchAssets(withLocalIdentifiers: [], options: nil)
         var visible = Set<String>()
         for i in 0..<assets.count { visible.insert(photoCacheName(assets.object(at: i).localIdentifier)) }
@@ -1578,7 +1590,10 @@ public func photosMain(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
         }
         let previous = (try? JSONDecoder().decode([String: PhotoCacheEntry].self, from: Data(contentsOf: index))) ?? [:]
         var entries: [String: PhotoCacheEntry] = [:]
-        var failed = false
+        var failed = allowed && newlySelected.contains { !visible.contains(photoCacheName($0)) }
+        if failed {
+            fputs("photos: the new selection is not available yet; run photos again.\n", thread_stderr)
+        }
         for i in 0..<assets.count {
             let asset = assets.object(at: i)
             let name = photoCacheName(asset.localIdentifier)
