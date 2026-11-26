@@ -92,10 +92,11 @@ for sdk in iphoneos iphonesimulator; do
     exit 1
   fi
   framework="$output/Build/Products/Release-$sdk/$name.framework"
-  mkdir -p "$framework/Resources"
-  cp "$source/WasmKit/LICENSE" "$framework/Resources/WasmKit-LICENSE"
-  cp "$source/WasmKit/NOTICE.txt" "$framework/Resources/WasmKit-NOTICE.txt"
-  cp "$build/packages/checkouts/swift-system/LICENSE.txt" "$framework/Resources/swift-system-LICENSE.txt"
+  # A top-level Resources directory hides the flat iOS framework's Info.plist from CFBundle.
+  mkdir -p "$framework/Notices"
+  cp "$source/WasmKit/LICENSE" "$framework/Notices/WasmKit-LICENSE"
+  cp "$source/WasmKit/NOTICE.txt" "$framework/Notices/WasmKit-NOTICE.txt"
+  cp "$build/packages/checkouts/swift-system/LICENSE.txt" "$framework/Notices/swift-system-LICENSE.txt"
   echo "Built $sdk ($architectures)"
 done
 

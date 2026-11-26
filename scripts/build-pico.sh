@@ -67,7 +67,8 @@ for target in iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64; do
     rm -f imap/c-client/utf8.o
     make -j4 -C imap/c-client utf8.o
     framework="$work/pico.framework"
-    mkdir -p "$framework/Resources"
+    # A top-level Resources directory hides the flat iOS framework's Info.plist from CFBundle.
+    mkdir -p "$framework/Notices"
     "$cc" -target "$triple" -isysroot "$sdk_path" -dynamiclib -Wl,-undefined,error \
       -Wl,-install_name,@rpath/pico.framework/pico -o "$framework/pico" \
       pico/main.o pico/utf8stub.o c-client/utf8.o pico/libpico.a pico/osdep/libpicoosd.a \
@@ -87,10 +88,10 @@ for target in iphoneos-arm64 iphonesimulator-arm64 iphonesimulator-x86_64; do
 <key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
 </dict></plist>
 PLIST
-    cp LICENSE "$framework/Resources/Alpine-LICENSE"
-    cp NOTICE "$framework/Resources/Alpine-NOTICE"
-    cp imap/NOTICE "$framework/Resources/IMAP-NOTICE"
-    cp "$build/downloads/ios-system-LICENSE" "$framework/Resources/ios-system-LICENSE"
+    cp LICENSE "$framework/Notices/Alpine-LICENSE"
+    cp NOTICE "$framework/Notices/Alpine-NOTICE"
+    cp imap/NOTICE "$framework/Notices/IMAP-NOTICE"
+    cp "$build/downloads/ios-system-LICENSE" "$framework/Notices/ios-system-LICENSE"
     lipo "$framework/pico" -verify_arch "$arch"
     nm -gU "$framework/pico" | grep ' _main$' >/dev/null
     if nm -j -u "$framework/pico" | grep -Ex '_(exit|_exit|fork|vfork|system|printf|putchar|puts)' >/dev/null; then
