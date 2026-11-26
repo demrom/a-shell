@@ -174,6 +174,11 @@ jobs:
           app=.build/app/a-Shell-mini-simulator/Build/Products/Debug-iphonesimulator/a-Shell-mini.app
           ios=xcfs/.build/artifacts/xcfs/ios_system/ios_system.xcframework/ios-arm64_x86_64-simulator/ios_system.framework
           bash tests/simulator-worker-pool.sh "$app" "$ios"
+      - name: Solve the reference LP through the full app startup profile
+        if: ${{ !cancelled() && steps.app-build.outcome == 'success' && matrix.platform == 'simulator' && matrix.scheme == 'a-Shell' }}
+        run: |
+          app=.build/app/a-Shell-simulator/Build/Products/Debug-iphonesimulator/a-Shell.app
+          bash tests/simulator-app.sh "$app" tests/simulator-cbc.sh tests/cbc/small.lp
       - name: Check the embedded Codex CLI
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell' }}
         run: bash tests/simulator-codex.sh .build/app/a-Shell-simulator/Build/Products/Debug-iphonesimulator/a-Shell.app terminal
