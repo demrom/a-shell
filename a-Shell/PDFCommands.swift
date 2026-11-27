@@ -73,6 +73,8 @@ private enum PDFCommand: String {
                     throw PDFCommandError("cannot open PDF: \(input)")
                 }
                 guard !document.isLocked else { throw PDFCommandError("PDF is locked: \(input)") }
+                // Reject an empty page tree even if PDFKit accepts the file.
+                guard document.pageCount > 0 else { throw PDFCommandError("PDF has no pages: \(input)") }
                 if self == .pdfinfo {
                     try Self.write("Pages:          \(document.pageCount)\n", to: thread_stdout)
                     return 0
@@ -81,7 +83,8 @@ private enum PDFCommand: String {
                 guard first <= end else { throw PDFCommandError("invalid page range \(first)...\(end)") }
                 let pages = first...end
                 if self == .pdftotext {
-                    let defaultOutput = inputURL.deletingPathExtension().appendingPathExtension("txt").path
+                    let outputBase = ["pdf", "PDF"].contains(inputURL.pathExtension) ? inputURL.deletingPathExtension() : inputURL
+                    let defaultOutput = outputBase.appendingPathExtension("txt").path
                     try Self.extract(document, pages: pages, layout: layout, output: paths.dropFirst().first ?? defaultOutput)
                 } else {
                     let digits = String(document.pageCount).count
@@ -206,8 +209,10 @@ private enum PDFCommand: String {
         }
         context.setFillColor(gray: 1, alpha: 1)
         context.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        let drawing = CGRect(x: 0, y: 0, width: sideways ? size.height : size.width,
-                             height: sideways ? size.width : size.height)
+        // The PDF transform fits and rotates the page, but does not scale it up.
+        let drawing = CGRect(x: 0, y: 0, width: sideways ? bounds.height : bounds.width,
+                             height: sideways ? bounds.width : bounds.height)
+        context.scaleBy(x: scale, y: scale)
         context.concatenate(pdf.getDrawingTransform(.mediaBox, rect: drawing, rotate: 0, preserveAspectRatio: true))
         context.drawPDFPage(pdf)
         guard let image = context.makeImage(),
