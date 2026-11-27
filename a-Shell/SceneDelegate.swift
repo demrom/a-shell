@@ -901,6 +901,12 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
     private var webAssemblyChildren: Set<pid_t> = []
     private var webAssemblyProcessDirectory: String?
     private var webAssemblyProcessGeneration: UInt64 = 0
+    private var webAssemblyProcessDescriptors: [Int32: Int32] = [:]
+    private var webAssemblyNextProcessHandle: Int32 = 3
+    private var webAssemblyDescriptorReply: (@MainActor (String?) -> Void)?
+    // ExtensionKit, the native shell and a guest all share the App's kernel FD table.
+    private static let webAssemblyProcessDescriptorLimit = 64
+    private static let webAssemblyProcessIOSize = 4096
     var resultStack: [Int32?] = []
     var javascriptRunning = false // We can't execute JS while we are already executing JS.
     var executeWebAssemblyCommandsRunning = false // We can't execute JS while we are already executing JS.
@@ -3293,7 +3299,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                 }
                 self.stdinString = "" // reinitialize stdin
                 NSLog("Executing \(command!.originalCommand) in executeWebAssComm, position= \(self.commandsStack.count) stdin: \(fileno(self.thread_stdin_copy)) stdout: \(fileno(self.thread_stdout_copy)) stderr: \(fileno(self.thread_stderr_copy)) ")
-                self.webView?.evaluateJavaScript(command!.jsCommand)
+                self.webView?.evaluateJavaScript("globalThis.ashellProcessGeneration = '\(generation)';\n" + command!.jsCommand)
                 // javascriptGroup.leave() // This is now triggered by a prompt() call
             }
             // force synchronization:
@@ -6457,11 +6463,16 @@ extension SceneDelegate: WKUIDelegate {
     
     private struct WebAssemblyProcessRequest: Decodable {
         let op: String
+        let generation: String
         let path: String?
         let argv: [String]?
         let env: [String]?
         let searchPath: Bool?
         let child: pid_t?
+        let streams: [Int32]?
+        let fd: Int32?
+        let length: Int?
+        let data: String?
     }
 
     private func webAssemblyProcessError(_ error: Int32) -> String {
@@ -6499,9 +6510,15 @@ extension SceneDelegate: WKUIDelegate {
     private func discardWebAssemblyChildren() {
         webAssemblyProcessGeneration &+= 1
         webAssemblyProcessDirectory = nil
+        for fd in webAssemblyProcessDescriptors.values { _ = close(fd) }
+        webAssemblyProcessDescriptors.removeAll()
+        webAssemblyNextProcessHandle = 3
+        let reply = webAssemblyDescriptorReply
+        webAssemblyDescriptorReply = nil
         let children = webAssemblyChildren
         webAssemblyChildren.removeAll()
         retireWebAssemblyChildren(children)
+        reply?(webAssemblyProcessError(EINTR))
     }
 
     private func retireWebAssemblyChildren(_ children: Set<pid_t>) {
@@ -6519,7 +6536,63 @@ extension SceneDelegate: WKUIDelegate {
         }
     }
 
-    private func webAssemblyProcess(_ payload: Substring, reply: @escaping (String?) -> Void) {
+    private func allocateWebAssemblyProcessHandle(_ fd: Int32) -> Int32 {
+        let handle = webAssemblyNextProcessHandle
+        webAssemblyNextProcessHandle += 1
+        webAssemblyProcessDescriptors[handle] = fd
+        return handle
+    }
+
+    private func webAssemblyDescriptorIO(_ request: WebAssemblyProcessRequest, reply: @escaping @MainActor (String?) -> Void) {
+        guard webAssemblyDescriptorReply == nil else { return reply(webAssemblyProcessError(EAGAIN)) }
+        guard let handle = request.fd, let source = webAssemblyProcessDescriptors[handle] else {
+            return reply(webAssemblyProcessError(EBADF))
+        }
+        let length: Int
+        let bytes: Data?
+        if request.op == "write" {
+            guard let encoded = request.data, encoded.utf8.count <= (Self.webAssemblyProcessIOSize + 2) / 3 * 4,
+                  let decoded = Data(base64Encoded: encoded), decoded.count <= Self.webAssemblyProcessIOSize else {
+                return reply(webAssemblyProcessError(EINVAL))
+            }
+            bytes = decoded
+            length = decoded.count
+        } else {
+            guard let count = request.length, (0...Self.webAssemblyProcessIOSize).contains(count) else {
+                return reply(webAssemblyProcessError(EINVAL))
+            }
+            bytes = nil
+            length = count
+        }
+        guard length != 0 else { return reply("0 0") }
+        let fd = fcntl(source, F_DUPFD_CLOEXEC, 0)
+        guard fd >= 0 else { return reply(webAssemblyProcessError(errno)) }
+        let generation = webAssemblyProcessGeneration
+        webAssemblyDescriptorReply = reply
+        // Keep blocking I/O off the UI actor. This temporary duplicate is owned
+        // until the syscall finishes; teardown closes the original and retires peers.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result: Int
+            var output = Data()
+            if let bytes {
+                result = bytes.withUnsafeBytes { write(fd, $0.baseAddress, length) }
+            } else {
+                output = Data(count: length)
+                result = output.withUnsafeMutableBytes { read(fd, $0.baseAddress, length) }
+            }
+            let error = errno
+            _ = close(fd)
+            let encoded = bytes == nil && result > 0 ? output.prefix(result).base64EncodedString() : nil
+            DispatchQueue.main.async {
+                guard generation == self.webAssemblyProcessGeneration, let reply = self.webAssemblyDescriptorReply else { return }
+                self.webAssemblyDescriptorReply = nil
+                guard result >= 0 else { return reply(self.webAssemblyProcessError(error)) }
+                reply("0 \(result)" + (encoded.map { " \($0)" } ?? ""))
+            }
+        }
+    }
+
+    private func webAssemblyProcess(_ payload: Substring, reply: @escaping @MainActor (String?) -> Void) {
         guard executeWebAssemblyCommandsRunning, webAssemblyTimer.isValid,
               let directory = webAssemblyProcessDirectory else {
             return reply(webAssemblyProcessError(EINVAL))
@@ -6527,6 +6600,43 @@ extension SceneDelegate: WKUIDelegate {
         guard payload.utf8.count <= 256 * 1024 else { return reply(webAssemblyProcessError(E2BIG)) }
         guard let request = try? JSONDecoder().decode(WebAssemblyProcessRequest.self, from: Data(payload.utf8)) else {
             return reply(webAssemblyProcessError(EINVAL))
+        }
+        guard request.generation == String(webAssemblyProcessGeneration) else {
+            return reply(webAssemblyProcessError(EINTR))
+        }
+        switch request.op {
+        case "pipe":
+            guard webAssemblyProcessDescriptors.count <= Self.webAssemblyProcessDescriptorLimit - 2,
+                  webAssemblyNextProcessHandle <= Int32.max - 2 else { return reply(webAssemblyProcessError(EMFILE)) }
+            var pair: [Int32] = [-1, -1]
+            guard pipe(&pair) == 0 else { return reply(webAssemblyProcessError(errno)) }
+            guard pair.allSatisfy({ fcntl($0, F_SETFD, FD_CLOEXEC) == 0 }), fcntl(pair[1], F_SETNOSIGPIPE, 1) == 0 else {
+                let error = errno
+                pair.forEach { _ = close($0) }
+                return reply(webAssemblyProcessError(error))
+            }
+            let readHandle = allocateWebAssemblyProcessHandle(pair[0])
+            let writeHandle = allocateWebAssemblyProcessHandle(pair[1])
+            return reply("0 \(readHandle) \(writeHandle)")
+        case "dup":
+            guard let handle = request.fd, let source = webAssemblyProcessDescriptors[handle] else {
+                return reply(webAssemblyProcessError(EBADF))
+            }
+            guard webAssemblyProcessDescriptors.count < Self.webAssemblyProcessDescriptorLimit,
+                  webAssemblyNextProcessHandle < Int32.max else { return reply(webAssemblyProcessError(EMFILE)) }
+            let fd = fcntl(source, F_DUPFD_CLOEXEC, 0)
+            guard fd >= 0 else { return reply(webAssemblyProcessError(errno)) }
+            return reply("0 \(allocateWebAssemblyProcessHandle(fd))")
+        case "close":
+            guard let handle = request.fd, let fd = webAssemblyProcessDescriptors.removeValue(forKey: handle) else {
+                return reply(webAssemblyProcessError(EBADF))
+            }
+            guard close(fd) == 0 else { return reply(webAssemblyProcessError(errno)) }
+            return reply("0 0")
+        case "read", "write":
+            return webAssemblyDescriptorIO(request, reply: reply)
+        default:
+            break
         }
         if request.op == "wait" {
             guard let child = request.child, child == -1 || webAssemblyChildren.contains(child) else {
@@ -6565,12 +6675,31 @@ extension SceneDelegate: WKUIDelegate {
         guard argv[0].utf8.elementsEqual(path.utf8), searchPath || path.contains("/") else {
             return reply(webAssemblyProcessError(ENOTSUP))
         }
-        guard let input = thread_stdin_copy, let output = thread_stdout_copy, let error = thread_stderr_copy else {
-            return reply(webAssemblyProcessError(EBADF))
+        guard let streams = request.streams, streams.count == 3 else {
+            return reply(webAssemblyProcessError(EINVAL))
+        }
+        let parent = [thread_stdin_copy, thread_stdout_copy, thread_stderr_copy]
+        var sources: [Int32] = []
+        for (index, handle) in streams.enumerated() {
+            let source: Int32
+            if (0..<3).contains(handle), let stream = parent[Int(handle)] {
+                source = fileno(stream)
+            } else if let fd = webAssemblyProcessDescriptors[handle] {
+                source = fd
+            } else {
+                return reply(webAssemblyProcessError(EBADF))
+            }
+            let flags = fcntl(source, F_GETFL)
+            guard flags >= 0 else { return reply(webAssemblyProcessError(errno)) }
+            let access = flags & O_ACCMODE
+            guard index == 0 ? access != O_WRONLY : access != O_RDONLY else {
+                return reply(webAssemblyProcessError(EBADF))
+            }
+            sources.append(source)
         }
         var descriptors: [Int32] = []
-        for stream in [input, output, error] {
-            let fd = fcntl(fileno(stream), F_DUPFD_CLOEXEC, 0)
+        for source in sources {
+            let fd = fcntl(source, F_DUPFD_CLOEXEC, 0)
             if fd < 0 {
                 let error = errno
                 descriptors.forEach { _ = close($0) }
@@ -6628,7 +6757,7 @@ extension SceneDelegate: WKUIDelegate {
         return (result, child)
     }
 
-    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+    func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping @MainActor (String?) -> Void) {
         let processPrefix = "ashell-process\n"
         if prompt.hasPrefix(processPrefix) {
             guard webView === self.webView, frame.isMainFrame, frame.request.url == LocalServerPorts.wasmURL else {
