@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        product: [Herdr, helix, Ruff]
+        product: [Herdr]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -79,61 +79,3 @@ jobs:
           include-hidden-files: true
           if-no-files-found: ignore
           path: .build/native/**/*.log
-  node-slice:
-    runs-on: macos-26
-    timeout-minutes: 360
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [device, simulator]
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - name: Toolchain and resources
-        run: |
-          xcodebuild -version
-          xcrun --sdk iphonesimulator --show-sdk-version
-          df -h .
-          sysctl hw.memsize
-          sysctl vm.swapusage
-      - name: Build pinned Node slice
-        env:
-          PLATFORM: ${{ matrix.platform }}
-        run: nice -n 15 bash ci/native-frameworks.sh node "$PLATFORM"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: node-slice-${{ matrix.platform }}
-          include-hidden-files: true
-          if-no-files-found: error
-          path: .build/dist/*
-      - name: Retain diagnostics
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: node-slice-${{ matrix.platform }}-logs
-          include-hidden-files: true
-          if-no-files-found: ignore
-          path: .build/native/**/*.log
-  node:
-    needs: node-slice
-    runs-on: macos-26
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          persist-credentials: false
-      - uses: astral-sh/setup-uv@v7
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: node-slice-*
-          merge-multiple: true
-          path: .build/node-slices
-      - name: Package and audit Node
-        run: nice -n 15 bash ci/native-frameworks.sh node
-      - uses: actions/upload-artifact@v7
-        with:
-          name: native-node
-          include-hidden-files: true
-          if-no-files-found: error
-          path: .build/dist/*
