@@ -49,7 +49,22 @@ For a focused WebView mailbox regression off-device, run `node tests/process-api
 
 Build `signal-wait.wasm` from `signal-wait.wat` with `wasm-tools parse`, and build `kill.c` with the overlay command above plus `-D_WASI_EMULATED_SIGNAL -lwasi-emulated-signal`. Run each in a separate terminal command under both engines. Expect `process-signal-ok` or `process-kill-ok`, guest status 0 and empty stderr, before the worker's ten-second sleep could finish. The libc row distinguishes termination by SIGTERM from a normal exit of 143.
 
-`kill` accepts a positive PID returned to the current guest. Signal 0 probes the child without changing its state, including after completion but before reap. SIGHUP, SIGINT, SIGQUIT, SIGKILL and SIGTERM request broker cancellation; they do not run a signal handler in the child. Acknowledged cancellation produces a signaled wait status, and reap removes the guest's ownership. Unsupported signals and process groups fail with ENOTSUP, invalid signals with EINVAL, and unowned PIDs with ESRCH. This does not implement guest signal delivery, SIGCHLD handlers, signal masks or process groups.
+`kill` accepts a positive PID returned to the current guest. Signal 0 probes the child without changing its state, including after completion but before reap. SIGHUP, SIGINT, SIGQUIT, SIGKILL and SIGTERM request broker cancellation; they do not run a signal handler in the child. Acknowledged cancellation produces a signaled wait status, and reap removes the guest's ownership. Unsupported signals and process groups fail with ENOTSUP, invalid signals with EINVAL, and unowned PIDs with ESRCH. The worker bridge does not deliver signals to guest handlers, provide SIGCHLD notifications, or implement process groups.
+
+## Guest alarm and signal masks
+
+WASI SDK 34's `-lwasi-emulated-signal` exports `signal` and `raise` but has no `sigaction`, masks, `alarm` or `sigsuspend`. Build the opt-in overlay and fixture with the stock SDK:
+
+```sh
+"$WASI_SDK_PATH/bin/clang" -O2 -std=c17 -Wall -Wextra -Werror \
+    -D_WASI_EMULATED_SIGNAL -I wasm-process/include \
+    tests/process-api/signal-mask.c wasm-process/signals.c \
+    -lwasi-emulated-signal -o signal-mask.wasm
+```
+
+Run `wasm ./signal-mask.wasm` and `wasmkit ./signal-mask.wasm` as separate mini terminal commands. Both must print exactly `process-signal-mask-ok` with status 0 and empty stderr. The fixture checks delivery during `sigsuspend`, the mask inside the handler, restoring the caller's mask and cancelling an alarm.
+
+State is local to the guest. Alarm delivery is cooperative at signal calls, not asynchronous during arbitrary code or I/O. `sigsuspend` currently waits for unmasked pending signals or the guest's monotonic alarm; it returns ENOTSUP when there is no deliverable source. This does not send or subscribe to host signals, stop or resume guests, or queue real-time signals.
 
 ## Interrupt a guest with a live worker
 

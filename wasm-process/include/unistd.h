@@ -10,6 +10,7 @@ extern "C" {
 int execve(const char *, char *const [], char *const []);
 int execv(const char *, char *const []);
 int execvp(const char *, char *const []);
+unsigned alarm(unsigned);
 
 #ifdef __cplusplus
 }
