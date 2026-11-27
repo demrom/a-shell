@@ -513,9 +513,13 @@ static void *run_pane(void *cookie) {
         if (!getcwd(observed, sizeof(observed))) error = errno;
         else if (stat(job->cwd, &wanted) || stat(observed, &actual)) error = errno;
         else if (wanted.st_dev != actual.st_dev || wanted.st_ino != actual.st_ino) error = EACCES;
+        pid_t pid = -1;
         if (!error) {
             ios_setWindowSize((int)job->cols, (int)job->rows, job->key);
-            pid_t pid = ios_fork();
+            pid = ios_fork();
+            if (pid < 0) error = errno;
+        }
+        if (!error) {
             // ios_fork allocates a private environment and holds stock pid_mtx until
             // command registration. Do not abort between allocation and ios_system.
             for (size_t i = 0; job->env && job->env[i]; i++) {

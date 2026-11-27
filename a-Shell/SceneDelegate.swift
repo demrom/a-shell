@@ -37,6 +37,7 @@ struct javascriptCommand {
     var jsCommand: String = ""
     var webAssemblyGroup: DispatchGroup? = nil
     var originalCommand: String = ""
+    var workingDirectory: String? = nil
     var stdout_fileName: String = ""
     var stderr_fileName: String = ""
 }
@@ -897,6 +898,9 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
     // TODO: remove all references to stdinString
     var stdinString: String = ""
     var commandsStack: [javascriptCommand?] = []
+    private var webAssemblyChildren: Set<pid_t> = []
+    private var webAssemblyProcessDirectory: String?
+    private var webAssemblyProcessGeneration: UInt64 = 0
     var resultStack: [Int32?] = []
     var javascriptRunning = false // We can't execute JS while we are already executing JS.
     var executeWebAssemblyCommandsRunning = false // We can't execute JS while we are already executing JS.
@@ -1304,9 +1308,13 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
             ios_setStreams(stdin_file, stdout_file, stdout_file)
             let pid = ios_fork()
             resultStack.removeAll()
-            ios_system(command.decomposedStringWithCanonicalMapping)
-            ios_waitpid(pid)
-            ios_releaseThreadId(pid)
+            if pid > 0 {
+                ios_system(command.decomposedStringWithCanonicalMapping)
+                ios_waitpid(pid)
+                ios_releaseThreadId(pid)
+            } else {
+                fputs("Cannot start command: process table full\n", stdout_file)
+            }
             // Send info to the stdout handler that the command has finished:
             let writeOpen = fcntl(stdout_pipe.fileHandleForWriting.fileDescriptor, F_GETFD)
             if (writeOpen >= 0) {
@@ -3151,6 +3159,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
         webAssemblyCommand.thread_stderr_copy = thread_stderr
         webAssemblyCommand.webAssemblyGroup = DispatchGroup()
         webAssemblyCommand.originalCommand = argumentString
+        webAssemblyCommand.workingDirectory = currentDirectory
         webAssemblyCommand.stdout_fileName = ""
         webAssemblyCommand.stderr_fileName = ""
 
@@ -3197,6 +3206,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
     
     func endWebAssemblyCommand(error: Int32, message: String) {
         if executeWebAssemblyCommandsRunning && webAssemblyTimer.isValid {
+            discardWebAssemblyChildren()
             errorCode = error
             errorMessage = message
             currentDispatchGroup?.leave()
@@ -3249,8 +3259,11 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
             DispatchQueue.main.async {
                 // Check the webassembly interpreter regularly (required in iOS 18 and above, a good idea nevertheless)
                 // See https://discord.com/channels/935519150305050644/935519150305050647/1431680783122174205
+                let generation = self.webAssemblyProcessGeneration
                 self.webAssemblyTimer = Timer.scheduledTimer(withTimeInterval: 0.6, repeats: true) { _ in
                     self.webView?.evaluateJavaScript("commandIsRunning;") { (result, error) in
+                        // A queued callback can arrive after the next guest starts.
+                        guard generation == self.webAssemblyProcessGeneration else { return }
                         if let error = error {
                             print(error)
                             wasmEndedWithError = true
@@ -3263,6 +3276,7 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                         }
                     }
                 }
+                self.webAssemblyProcessDirectory = command!.workingDirectory
                 self.thread_stdin_copy = command!.thread_stdin_copy
                 if (command!.stdout_fileName == "") {
                     self.thread_stdout_copy = command!.thread_stdout_copy
@@ -4038,8 +4052,12 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                         self.lastExecution = .now
                         self.nextExecution += TimeInterval(interval)
                         let pid = ios_fork()
-                        _ = ios_system(command.decomposedStringWithCanonicalMapping)
-                        ios_waitpid(pid)
+                        if pid > 0 {
+                            _ = ios_system(command.decomposedStringWithCanonicalMapping)
+                            ios_waitpid(pid)
+                        } else {
+                            fputs("Cannot start command: process table full\n", stdout_file)
+                        }
                         fflush(thread_stdout)
                         let closeTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: false) {_ in
                             fflush(thread_stdout)
@@ -4398,26 +4416,32 @@ class SceneDelegate: UIViewController, UIWindowSceneDelegate, WKNavigationDelega
                     }
                 }
                 self.resultStack.removeAll()
-                self.pid = ios_fork()
-                DispatchQueue.main.async {
-                    UIApplication.shared.isIdleTimerDisabled = true
-                }
+                let pid = ios_fork()
                 self.interactiveCommandRunning = false // if it's interactive, ios_system will set it to true
                 self.lastKeyboardInput = ""
-                // decompose file names (and commands) using a decomposed (NFD) UTF8 form,
-                // the keyboard uses NFC with non-English systems.
-                // See: https://github.com/holzschu/a-shell/issues/995
-                // And: https://developer.apple.com/forums/thread/817449
-                ios_system(self.currentCommand.decomposedStringWithCanonicalMapping)
-                NSLog("Returned from ios_system")
-                // for long running commands, ios_waitpid eats up to 68% CPU.
-                // but for short-running commands, we need it to be reactive.
-                // I tried with a timer, but it didn't work (not reactive enough, fails with dash)
-                ios_waitpid(self.pid)
-                NSLog("Returned from ios_waitpid")
-                ios_releaseThreadId(self.pid)
-                DispatchQueue.main.async {
-                    UIApplication.shared.isIdleTimerDisabled = false
+                if pid > 0 {
+                    self.pid = pid
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = true
+                    }
+                    // decompose file names (and commands) using a decomposed (NFD) UTF8 form,
+                    // the keyboard uses NFC with non-English systems.
+                    // See: https://github.com/holzschu/a-shell/issues/995
+                    // And: https://developer.apple.com/forums/thread/817449
+                    ios_system(self.currentCommand.decomposedStringWithCanonicalMapping)
+                    NSLog("Returned from ios_system")
+                    // for long running commands, ios_waitpid eats up to 68% CPU.
+                    // but for short-running commands, we need it to be reactive.
+                    // I tried with a timer, but it didn't work (not reactive enough, fails with dash)
+                    ios_waitpid(pid)
+                    NSLog("Returned from ios_waitpid")
+                    ios_releaseThreadId(pid)
+                    DispatchQueue.main.async {
+                        UIApplication.shared.isIdleTimerDisabled = false
+                    }
+                } else {
+                    fputs("Cannot start command: process table full\n", self.stdout_file)
+                    fflush(self.stdout_file)
                 }
                 // NSLog("Done executing command: \(command)")
                 // NSLog("Current directory: \(FileManager().currentDirectoryPath)")
@@ -6431,7 +6455,189 @@ extension SceneDelegate: WKUIDelegate {
         return fd
     }
     
+    private struct WebAssemblyProcessRequest: Decodable {
+        let op: String
+        let path: String?
+        let argv: [String]?
+        let env: [String]?
+        let searchPath: Bool?
+        let child: pid_t?
+    }
+
+    private func webAssemblyProcessError(_ error: Int32) -> String {
+        let wasi: Int
+        switch error {
+        case E2BIG: wasi = 1
+        case EACCES: wasi = 2
+        case EAGAIN: wasi = 6
+        case EBADF: wasi = 8
+        case ECHILD: wasi = 12
+        case EEXIST: wasi = 20
+        case EINTR: wasi = 27
+        case EINVAL: wasi = 28
+        case EISDIR: wasi = 31
+        case ELOOP: wasi = 32
+        case EMFILE: wasi = 33
+        case ENAMETOOLONG: wasi = 37
+        case ENFILE: wasi = 41
+        case ENOENT: wasi = 44
+        case ENOEXEC: wasi = 45
+        case ENOMEM: wasi = 48
+        case ENOSPC: wasi = 51
+        case ENOSYS: wasi = 52
+        case ENOTDIR: wasi = 54
+        case ENOTSUP: wasi = 58
+        case EPERM: wasi = 63
+        case EPIPE: wasi = 64
+        case ESRCH: wasi = 71
+        case ETIMEDOUT: wasi = 73
+        default: wasi = 29
+        }
+        return "-\(wasi) 0"
+    }
+
+    private func discardWebAssemblyChildren() {
+        webAssemblyProcessGeneration &+= 1
+        webAssemblyProcessDirectory = nil
+        let children = webAssemblyChildren
+        webAssemblyChildren.removeAll()
+        retireWebAssemblyChildren(children)
+    }
+
+    private func retireWebAssemblyChildren(_ children: Set<pid_t>) {
+        for child in children {
+            DispatchQueue.global().async {
+                var status: Int32 = 0
+                // A failed reap can mean the runtime already invalidated this PID.
+                guard ashellWaitWorker(child, &status, WNOHANG) == 0 else { return }
+                let error = ios_killpid(child, SIGKILL)
+                if error != 0 && error != ESRCH {
+                    NSLog("wasm: could not cancel worker PID %d (error %d); waiting for exit", child, error)
+                }
+                _ = ashellWaitWorker(child, &status, 0)
+            }
+        }
+    }
+
+    private func webAssemblyProcess(_ payload: Substring, reply: @escaping (String?) -> Void) {
+        guard executeWebAssemblyCommandsRunning, webAssemblyTimer.isValid,
+              let directory = webAssemblyProcessDirectory else {
+            return reply(webAssemblyProcessError(EINVAL))
+        }
+        guard payload.utf8.count <= 256 * 1024 else { return reply(webAssemblyProcessError(E2BIG)) }
+        guard let request = try? JSONDecoder().decode(WebAssemblyProcessRequest.self, from: Data(payload.utf8)) else {
+            return reply(webAssemblyProcessError(EINVAL))
+        }
+        if request.op == "wait" {
+            guard let child = request.child, child == -1 || webAssemblyChildren.contains(child) else {
+                return reply(webAssemblyProcessError(ECHILD))
+            }
+            let candidates = child == -1 ? webAssemblyChildren : [child]
+            guard !candidates.isEmpty else { return reply(webAssemblyProcessError(ECHILD)) }
+            for candidate in candidates {
+                var status: Int32 = 0
+                let result = ashellWaitWorker(candidate, &status, WNOHANG)
+                if result < 0 {
+                    let error = errno
+                    if error == ECHILD || error == ESRCH {
+                        webAssemblyChildren.remove(candidate)
+                        if child == -1 { continue }
+                    }
+                    return reply(webAssemblyProcessError(error))
+                }
+                if result > 0 {
+                    webAssemblyChildren.remove(candidate)
+                    return reply("\(result) \(status)")
+                }
+            }
+            return reply(webAssemblyChildren.isEmpty ? webAssemblyProcessError(ECHILD) : "0 0")
+        }
+
+        guard request.op == "spawn", let path = request.path, !path.isEmpty,
+              let argv = request.argv, !argv.isEmpty, let env = request.env,
+              let searchPath = request.searchPath,
+              argv.count <= 4096, env.count <= 4096,
+              !path.utf8.contains(0), !argv.contains(where: { $0.utf8.contains(0) }),
+              env.allSatisfy({ !$0.utf8.contains(0) && !$0.hasPrefix("=") && $0.contains("=") }) else {
+            return reply(webAssemblyProcessError(EINVAL))
+        }
+        // The current broker carries a command line, not an independent argv[0].
+        guard argv[0].utf8.elementsEqual(path.utf8), searchPath || path.contains("/") else {
+            return reply(webAssemblyProcessError(ENOTSUP))
+        }
+        guard let input = thread_stdin_copy, let output = thread_stdout_copy, let error = thread_stderr_copy else {
+            return reply(webAssemblyProcessError(EBADF))
+        }
+        var descriptors: [Int32] = []
+        for stream in [input, output, error] {
+            let fd = fcntl(fileno(stream), F_DUPFD_CLOEXEC, 0)
+            if fd < 0 {
+                let error = errno
+                descriptors.forEach { _ = close($0) }
+                return reply(webAssemblyProcessError(error))
+            }
+            descriptors.append(fd)
+        }
+
+        let generation = webAssemblyProcessGeneration
+        // Admission uses a MainActor ExtensionKit pool. The synchronous C call must not run there.
+        DispatchQueue.global(qos: .userInitiated).async { [descriptors] in
+            let (error, child) = Self.admitWebAssemblyChild(path: path, directory: directory, argv: argv, env: env, fds: descriptors)
+            DispatchQueue.main.async {
+                guard generation == self.webAssemblyProcessGeneration else {
+                    if error == 0 { self.retireWebAssemblyChildren([child]) }
+                    return reply(self.webAssemblyProcessError(EINTR))
+                }
+                guard error == 0 else { return reply(self.webAssemblyProcessError(error)) }
+                self.webAssemblyChildren.insert(child)
+                reply("0 \(child)")
+            }
+        }
+    }
+
+    private nonisolated static func admitWebAssemblyChild(
+        path: String, directory: String, argv: [String], env: [String], fds: [Int32]
+    ) -> (error: Int32, child: pid_t) {
+        var streams: [UnsafeMutablePointer<FILE>] = []
+        defer {
+            streams.forEach { _ = fclose($0) }
+            fds.dropFirst(streams.count).forEach { _ = close($0) }
+        }
+        for (index, fd) in fds.enumerated() {
+            guard let stream = fdopen(fd, index == 0 ? "rb" : "wb") else { return (errno, 0) }
+            streams.append(stream)
+        }
+        let args = argv.map { strdup($0) }
+        let environment = env.map { strdup($0) }
+        defer {
+            args.forEach { free($0) }
+            environment.forEach { free($0) }
+        }
+        guard !args.contains(nil), !environment.contains(nil) else { return (ENOMEM, 0) }
+
+        let original = (thread_stdin, thread_stdout, thread_stderr)
+        (thread_stdin, thread_stdout, thread_stderr) = (streams[0], streams[1], streams[2])
+        defer { (thread_stdin, thread_stdout, thread_stderr) = original }
+
+        var child: pid_t = 0
+        let result = (args + [nil]).withUnsafeBufferPointer { args in
+            (environment + [nil]).withUnsafeBufferPointer { environment in
+                ashellSpawnWorkerWithDirectory(&child, path, directory, args.baseAddress, environment.baseAddress)
+            }
+        }
+        return (result, child)
+    }
+
     func webView(_ webView: WKWebView, runJavaScriptTextInputPanelWithPrompt prompt: String, defaultText: String?, initiatedByFrame frame: WKFrameInfo, completionHandler: @escaping (String?) -> Void) {
+        let processPrefix = "ashell-process\n"
+        if prompt.hasPrefix(processPrefix) {
+            guard webView === self.webView, frame.isMainFrame, frame.request.url == LocalServerPorts.wasmURL else {
+                completionHandler(webAssemblyProcessError(EACCES))
+                return
+            }
+            webAssemblyProcess(prompt.dropFirst(processPrefix.count), reply: completionHandler)
+            return
+        }
         // communication with libc from webAssembly:
         let arguments = prompt.components(separatedBy: "\n")
         // NSLog("prompt: \(prompt)")
@@ -6898,6 +7104,7 @@ extension SceneDelegate: WKUIDelegate {
                     }
                 }
                 let pid = ios_fork()
+                guard pid > 0 else { completionHandler("-1"); return }
                 var result = ios_system(arguments[2].decomposedStringWithCanonicalMapping)
                 ios_waitpid(pid)
                 ios_releaseThreadId(pid)
@@ -7158,6 +7365,7 @@ extension SceneDelegate: WKUIDelegate {
                 thread_stdout = thread_stdout_copy
                 thread_stderr = thread_stderr_copy
                 let pid = ios_fork()
+                guard pid > 0 else { completionHandler("-1"); return }
                 var result = ios_system(arguments[2].decomposedStringWithCanonicalMapping)
                 ios_waitpid(pid)
                 ios_releaseThreadId(pid)

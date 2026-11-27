@@ -9,7 +9,6 @@ let package = Package(
     targets: [
         .binaryTarget(name: "libssh2", url: "https://github.com/holzschu/libssh2-apple/releases/download/v1.11.0/libssh2-dynamic.xcframework.zip", checksum: "cacfe1789b197b727119f7e32f561eaf9acc27bf38cd19975b74fce107f868a6"),
         .binaryTarget(name: "openssl", url: "https://github.com/holzschu/openssl-apple/releases/download/v1.1.1w/openssl-dynamic.xcframework.zip", checksum: "329e8317cf9bee8e138da5d032330a7a1bd2473cf44c9c083cb2f0636abb8b80"),
-        .binaryTarget(name: "ios_system", url: "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/ios_system.xcframework.zip", checksum: "bac0689c792901cbf410899162c06ab22a950b032adfb5f94b5c3ab6a661e883"),
         .binaryTarget(name: "awk", url: "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/awk.xcframework.zip", checksum: "d797f840ca1f749273a4dc966b99c1b822c3dc9b513e43d75f7e062dd1fd5d7d"),
         .binaryTarget(name: "curl_ios", url: "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/curl_ios.xcframework.zip", checksum: "116b429ee3c0188c271021e4640e20a4a4b896889d12a70903d22e98a9ea43e6"),
         .binaryTarget(name: "files", url: "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/files.xcframework.zip", checksum: "88a9f39c248e3ab05d1110d2e0a9f602dc5da16a6fc9191574dcaa7d121efaa2"),
