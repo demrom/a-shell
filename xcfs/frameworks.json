@@ -874,10 +874,10 @@
       }
     },
     "a-shell-WasmKitCommand": {
-      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15216027176.zip",
-      "sha256": "34f7cff6f0ede493b9157c304292212c7fe65b5885f4e80556a8eaf883d68298",
-      "run": "https://github.com/demrom/a-shell/actions/runs/46032038211/attempts/1",
-      "revision": "afcfacd64fc73fa1cff8305cc60e66a74ecb856b",
+      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15224891328.zip",
+      "sha256": "f75925966f13438e6895b6c1303cabf9c6833376b2199565dfa2f6ae79ee8bf5",
+      "run": "https://github.com/demrom/a-shell/actions/runs/46049504515/attempts/1",
+      "revision": "b03d04640868eb068bdc8a98e180816b66f5f705",
       "frameworks": {
         "WasmKitCommand": "WasmKitCommand.xcframework.zip"
       }
