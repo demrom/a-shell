@@ -278,6 +278,9 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
         replaceCommand("text", "text", true)  // send a text to a contact
         replaceCommand("play", "play_main", true)
         replaceCommand("view", "preview_main", true)
+        replaceCommand("pdftotext", "pdftotext", true)
+        replaceCommand("pdftoppm", "pdftoppm", true)
+        replaceCommand("pdfinfo", "pdfinfo", true)
         replaceCommand("z", "z_command", true) // change directory based on frequencys
         // replaceCommand("rehash", "rehash", true) // update list of commands for auto-complete
         replaceCommand("repeatCommand", "repeatCommand", true)

@@ -97,6 +97,16 @@ Shortcuts can be executed either "In Extension" or "In App". "In Extension" mean
 
 Both kind of shortcuts run by default in the same specific directory, `$SHORTCUTS` or `~shortcuts`. Of course, since you can run the commands `cd` and `jump` in a shortcut, you can pretty much go anywhere.
 
+## PDF commands
+
+In a-Shell and a-Shell mini, these commands use Apple's PDFKit and require no package installation:
+
+- `pdftotext [-f N] [-l N] [-layout] input.pdf [output.txt|-]` extracts embedded text as UTF-8. The default is a `.txt` file next to the PDF; use `-` for standard output. `-layout` approximates the visual placement of horizontal text on unrotated pages. There is no OCR.
+- `pdftoppm [-f N] [-l N] [-r DPI] -png input.pdf prefix` renders numbered PNG files such as `prefix-1.png` at 150 DPI by default. Each page is limited to 16 megapixels; lower the resolution if a page is too large.
+- `pdfinfo input.pdf` prints the page count as `Pages:`.
+
+Page numbers are one-based and inclusive. Other Poppler options are not supported.
+
 ## Programming / add more commands:
 
 a-Shell has several programming languages installed: Python, Lua, JS, C, C++ and TeX. 
