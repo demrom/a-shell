@@ -59,6 +59,12 @@ int32_t ashell_process_spawn(
 ASHELL_PROCESS_IMPORT("process_wait")
 int32_t ashell_process_wait(int32_t child, uint32_t flags, int32_t *status);
 
+/* Signal numbers use the wasm32 wasi-libc namespace. Only positive, owned
+ * unreaped PIDs are addressable. Signal 0 probes membership; HUP, INT, QUIT,
+ * KILL and TERM request broker cancellation, not delivery to a guest handler. */
+ASHELL_PROCESS_IMPORT("process_kill")
+int32_t ashell_process_kill(int32_t child, int32_t signal);
+
 /* Allocate read/write descriptors in the same table as the Preview 1 imports.
  * On error, leave that table and the output pair unchanged. */
 ASHELL_PROCESS_IMPORT("process_pipe")

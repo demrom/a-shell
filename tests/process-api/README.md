@@ -45,6 +45,12 @@ For a focused WebView mailbox regression off-device, run `node tests/process-api
 
 `tests/process-api/popen.c` uses only POSIX calls. Once the FD path is implemented, build it with the same overlay and run it in both engines. It requires the child output and EOF from `popen("…", "r")`, an encoded exit 7 from `pclose`, and exactly `process-popen-ok` on guest stdout with guest exit 0. Stock SDK 34 cannot build it: with the wait header supplied, `popen` and `pclose` are undeclared. This is not part of the spawn/wait preview.
 
+## Signal an owned worker
+
+Build `signal-wait.wasm` from `signal-wait.wat` with `wasm-tools parse`, and build `kill.c` with the overlay command above plus `-D_WASI_EMULATED_SIGNAL -lwasi-emulated-signal`. Run each in a separate terminal command under both engines. Expect `process-signal-ok` or `process-kill-ok`, guest status 0 and empty stderr, before the worker's ten-second sleep could finish. The libc row distinguishes termination by SIGTERM from a normal exit of 143.
+
+`kill` accepts a positive PID returned to the current guest. Signal 0 probes the child without changing its state, including after completion but before reap. SIGHUP, SIGINT, SIGQUIT, SIGKILL and SIGTERM request broker cancellation; they do not run a signal handler in the child. Acknowledged cancellation produces a signaled wait status, and reap removes the guest's ownership. Unsupported signals and process groups fail with ENOTSUP, invalid signals with EINVAL, and unowned PIDs with ESRCH. This does not implement guest signal delivery, SIGCHLD handlers, signal masks or process groups.
+
 ## Interrupt a guest with a live worker
 
 Build `cancel-spawn.wasm` with `wasm-tools parse tests/process-api/cancel-spawn.wat -o cancel-spawn.wasm`. Copy it to a fresh Documents subdirectory, `cd` there in the mini terminal, and run `wasmkit ./cancel-spawn.wasm`. Without interruption, confirm the worker writes `ready` to `process-cancel-started` and then `leaked` to `process-cancel-leaked` after 10 seconds. This is the delivery control, not a failure.

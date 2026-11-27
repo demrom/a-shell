@@ -138,6 +138,15 @@ pid_t wait(int *status) {
     return waitpid(-1, status, 0);
 }
 
+int kill(pid_t child, int signal) {
+    int32_t result = ashell_process_kill(child, signal);
+    if (result < 0) {
+        errno = -result;
+        return -1;
+    }
+    return 0;
+}
+
 extern char **environ;
 
 static int wait_for_child(pid_t child) {

@@ -35,6 +35,14 @@ static inline pid_t ashellWaitWorker(pid_t pid, int *status, int options) {
 #endif
 }
 
+static inline int ashellKillWorker(pid_t pid, int signal) {
+#if defined(IOS_WORKER_KILL_SUPPORTED)
+    return ios_kill_worker(pid, signal);
+#else
+    return ENOTSUP;
+#endif
+}
+
 // Existing ios_system status setter; pthread cancellation skips a command return.
 void set_session_errno(int status);
 #import "../native-deps/herdr-parallel-port/PaneWire.h"

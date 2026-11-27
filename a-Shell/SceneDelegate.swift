@@ -6546,6 +6546,7 @@ extension SceneDelegate: WKUIDelegate {
         let env: [String]?
         let searchPath: Bool?
         let child: pid_t?
+        let signal: Int32?
         let streams: [Int32]?
         let fd: Int32?
         let length: Int?
@@ -6682,6 +6683,21 @@ extension SceneDelegate: WKUIDelegate {
             return reply(webAssemblyProcessError(EINTR))
         }
         switch request.op {
+        case "kill":
+            guard let child = request.child, let signal = request.signal, (0..<65).contains(signal) else {
+                return reply(webAssemblyProcessError(EINVAL))
+            }
+            guard child > 0 else { return reply(webAssemblyProcessError(ENOTSUP)) }
+            guard webAssemblyChildren.contains(child) else { return reply(webAssemblyProcessError(ESRCH)) }
+            // The allowed wasi-libc signals use the same numbers on Darwin.
+            switch signal {
+            case 0, 1, 2, 3, 9, 15:
+                let error = ashellKillWorker(child, signal)
+                if error == ESRCH { webAssemblyChildren.remove(child) }
+                return reply(error == 0 ? "0 0" : webAssemblyProcessError(error))
+            default:
+                return reply(webAssemblyProcessError(ENOTSUP))
+            }
         case "pipe":
             guard webAssemblyProcessDescriptors.count <= Self.webAssemblyProcessDescriptorLimit - 2,
                   webAssemblyNextProcessHandle <= Int32.max - 2 else { return reply(webAssemblyProcessError(EMFILE)) }
