@@ -1,0 +1,447 @@
+diff --git a/Sources/WASI/Platform/DescriptorTransfer.swift b/Sources/WASI/Platform/DescriptorTransfer.swift
+new file mode 100644
+index 0000000..60cb955
+--- /dev/null
++++ b/Sources/WASI/Platform/DescriptorTransfer.swift
+@@ -0,0 +1,14 @@
++#if canImport(Darwin)
++    import Darwin
++#endif
++
++/// Protect a descriptor while it is between the guest table and the host close.
++/// Blocking guest I/O must stay outside this scope.
++func withDescriptorTransfer<Result>(_ body: () throws -> Result) rethrows -> Result {
++    #if canImport(Darwin)
++        var previous: CInt = PTHREAD_CANCEL_ENABLE
++        pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous)
++        defer { pthread_setcancelstate(previous, nil) }
++    #endif
++    return try body()
++}
+diff --git a/Sources/WASI/Platform/Directory.swift b/Sources/WASI/Platform/Directory.swift
+index 9b3e01b..a13f740 100644
+--- a/Sources/WASI/Platform/Directory.swift
++++ b/Sources/WASI/Platform/Directory.swift
+@@ -12,6 +12,13 @@ extension DirEntry: WASIDir, FdWASIEntry {
+         try SandboxPrimitives.readlinkAt(start: fd, path: path)
+     }
+
++    #if os(iOS)
++        func usesLegacyTTY(_ path: String) -> Bool {
++            (preopenPath == "/dev" && path == "tty") ||
++                (preopenPath == "/" && (path == "dev/tty" || path == "/dev/tty"))
++        }
++    #endif
++
+     func openFile(
+         symlinkFollow: Bool,
+         path: String,
+@@ -69,8 +76,7 @@ extension DirEntry: WASIDir, FdWASIEntry {
+         #if os(iOS)
+         // A sandboxed command can expose /dev/tty through the root preopen
+         // without opening the /dev directory itself.
+-        if (preopenPath == "/dev" && path == "tty") ||
+-            (preopenPath == "/" && (path == "dev/tty" || path == "/dev/tty")) {
++        if usesLegacyTTY(path) {
+             return FileDescriptor(rawValue: 4) // special case for /dev/tty
+         }
+         let permissions = FileDescriptor.FilePermissions(rawValue: 0o644)
+diff --git a/Sources/WASI/Platform/File.swift b/Sources/WASI/Platform/File.swift
+index 07fc174..22bea5f 100644
+--- a/Sources/WASI/Platform/File.swift
++++ b/Sources/WASI/Platform/File.swift
+@@ -50,15 +50,6 @@ extension FdWASIFile {
+                     try fd.write(UnsafeRawBufferPointer($0))
+                 })
+         }
+-        // for debugging purposes
+-        for index in 0..<buffers.count {
+-            try buffers.withHostBuffer(at: index) {
+-                let typedPtr = $0.bindMemory(to: CChar.self)
+-                let decompressedString = String(cString: typedPtr.baseAddress!)
+-                NSLog("writing on \(fd.rawValue): \(decompressedString)")
+-                return 0
+-            }
+-        }
+         return bytesWritten
+     }
+
+diff --git a/Sources/WASI/Platform/HostFileSystem.swift b/Sources/WASI/Platform/HostFileSystem.swift
+index ce46a08..58c1011 100644
+--- a/Sources/WASI/Platform/HostFileSystem.swift
++++ b/Sources/WASI/Platform/HostFileSystem.swift
+@@ -6,8 +6,11 @@ import Foundation
+ /// This implementation provides access to actual files and directories on the host system.
+ final class HostFileSystem: FileSystemImplementation, Sendable {
+
++    let opensOnSingleCommandThread: Bool
++
+     /// Creates a new host file system.
+-    init() {
++    init(opensOnSingleCommandThread: Bool = false) {
++        self.opensOnSingleCommandThread = opensOnSingleCommandThread
+     }
+
+     // MARK: - FileSystemImplementation (WASI API)
+@@ -40,6 +43,22 @@ final class HostFileSystem: FileSystemImplementation, Sendable {
+         fdflags: WASIAbi.Fdflags,
+         symlinkFollow: Bool
+     ) throws -> FdEntry {
++        try openAt(
++            dirFd: dirFd, path: path, oflags: oflags, fsRightsBase: fsRightsBase,
++            fdflags: fdflags, symlinkFollow: symlinkFollow, install: { $0 }
++        )
++    }
++
++    /// Open interruptibly, then transfer the new descriptor or close it before cancellation resumes.
++    func openAt<Result>(
++        dirFd: any WASIDir,
++        path: String,
++        oflags: WASIAbi.Oflags,
++        fsRightsBase: WASIAbi.Rights,
++        fdflags: WASIAbi.Fdflags,
++        symlinkFollow: Bool,
++        install: (FdEntry) throws -> Result
++    ) throws -> Result {
+         var accessMode: FileAccessMode = []
+         if fsRightsBase.contains(.FD_READ) {
+             NSLog("WK openAt, adding accesMode to .read")
+@@ -50,10 +69,10 @@ final class HostFileSystem: FileSystemImplementation, Sendable {
+             accessMode.insert(.write)
+         }
+
+-        guard let dirFd = dirFd as? DirEntry else {
++        guard let directory = dirFd as? DirEntry else {
+             throw WASIAbi.Errno.EBADF
+         }
+-        let hostFd = try dirFd.openFile(
++        let hostFd = try directory.openFile(
+             symlinkFollow: symlinkFollow,
+             path: path,
+             oflags: oflags,
+@@ -61,15 +80,22 @@ final class HostFileSystem: FileSystemImplementation, Sendable {
+             fdflags: fdflags
+         )
+
+-        let actualFileType = try hostFd.attributes().fileType
+-        if oflags.contains(.DIRECTORY), !actualFileType.isDirectory {
+-            throw WASIAbi.Errno.ENOTDIR
+-        }
+-
+-        if actualFileType.isDirectory {
+-            return .directory(DirEntry(preopenPath: nil, fd: hostFd))
+-        } else {
+-            return .file(RegularFileEntry(fd: hostFd, accessMode: accessMode))
++        return try withDescriptorTransfer {
++            do {
++                let actualFileType = try hostFd.attributes().fileType
++                if oflags.contains(.DIRECTORY), !actualFileType.isDirectory {
++                    throw WASIAbi.Errno.ENOTDIR
++                }
++                if actualFileType.isDirectory {
++                    return try install(.directory(DirEntry(preopenPath: nil, fd: hostFd)))
++                }
++                return try install(.file(RegularFileEntry(fd: hostFd, accessMode: accessMode)))
++            } catch {
++                #if os(iOS)
++                    if directory.usesLegacyTTY(path) { throw error } // Borrowed /dev/tty.
++                #endif
++                throw CleanupFailure.preserving(error, cleanup: hostFd.close)
++            }
+         }
+     }
+
+diff --git a/Sources/WASI/Platform/ProcessDescriptors.swift b/Sources/WASI/Platform/ProcessDescriptors.swift
+new file mode 100644
+index 0000000..f9762e7
+--- /dev/null
++++ b/Sources/WASI/Platform/ProcessDescriptors.swift
+@@ -0,0 +1,87 @@
++#if canImport(Darwin)
++    import Darwin
++#endif
++
++// The command bridge must mask pthread cancellation through each ownership
++// transfer, including receipt of any returned raw host descriptor.
++extension WASIBridgeToHost {
++    /// Install the two owned ends of a pipe in the guest's actual Preview 1 table.
++    @_spi(WASIPlatform) public func createProcessPipe() throws -> (read: Int32, write: Int32) {
++        #if canImport(Darwin)
++            try underlying.fdTable.withLock { table in
++                let read = try firstFreeProcessDescriptor(in: table)
++                let write = try firstFreeProcessDescriptor(in: table, excluding: read)
++                var pair: [CInt] = [-1, -1]
++                try valueOrErrno { Darwin.pipe(&pair) }
++                do {
++                    for index in pair.indices {
++                        let fd = pair[index]
++                        // a-Shell's WASI layer reserves host fd 4 for /dev/tty.
++                        if fd < 5 {
++                            pair[index] = try valueOrErrno { fcntl(fd, F_DUPFD_CLOEXEC, 5) }
++                            _ = Darwin.close(fd)
++                        } else {
++                            try valueOrErrno { fcntl(fd, F_SETFD, FD_CLOEXEC) }
++                        }
++                    }
++                    try valueOrErrno { fcntl(pair[1], F_SETNOSIGPIPE, 1) }
++                } catch {
++                    for fd in pair { _ = Darwin.close(fd) }
++                    throw error
++                }
++                table[read] = .file(RegularFileEntry(fd: FileDescriptor(rawValue: pair[0]), accessMode: .read))
++                table[write] = .file(RegularFileEntry(fd: FileDescriptor(rawValue: pair[1]), accessMode: .write))
++                return (Int32(read), Int32(write))
++            }
++        #else
++            throw WASIAbi.Errno.ENOTSUP
++        #endif
++    }
++
++    /// POSIX `dup2` in the guest namespace. This never moves or consumes `source`.
++    @_spi(WASIPlatform) public func duplicateProcessDescriptor(_ source: UInt32, to target: UInt32) throws {
++        #if canImport(Darwin)
++            let displaced = try underlying.fdTable.withLock { table -> (any WASIEntry)? in
++                guard let original = table[source] else { throw WASIAbi.Errno.EBADF }
++                guard source != target else { return nil }
++                guard let file = original.asFile() as? any FdWASIFile else { throw WASIAbi.Errno.ENOTSUP }
++                let fd = try valueOrErrno { fcntl(file.fd.rawValue, F_DUPFD_CLOEXEC, 5) }
++                let prior = table[target]?.asEntry()
++                table[target] = .file(RegularFileEntry(fd: FileDescriptor(rawValue: fd), accessMode: file.accessMode))
++                return prior
++            }
++            // POSIX does not report an error closing the displaced descriptor.
++            if let displaced, !displaced.isBorrowed, displaced.hostFileDescriptor != 4 {
++                try? displaced.close()
++            }
++        #else
++            throw WASIAbi.Errno.ENOTSUP
++        #endif
++    }
++
++    /// Check whether the guest has a descriptor before applying a spawn action.
++    @_spi(WASIPlatform) public func containsProcessDescriptor(_ descriptor: UInt32) -> Bool {
++        underlying.fdTable.withLock { $0[descriptor] != nil }
++    }
++
++    /// Duplicate a guest file for one child stdio stream. The caller owns the result.
++    @_spi(WASIPlatform) public func duplicateProcessHostDescriptor(_ descriptor: UInt32, writing: Bool) throws -> CInt {
++        #if canImport(Darwin)
++            try underlying.fdTable.withLock { table in
++                guard let entry = table[descriptor] else { throw WASIAbi.Errno.EBADF }
++                guard let file = entry.asFile() as? any FdWASIFile else { throw WASIAbi.Errno.ENOTSUP }
++                guard file.accessMode.contains(writing ? .write : .read) else { throw WASIAbi.Errno.EBADF }
++                return try valueOrErrno { fcntl(file.fd.rawValue, F_DUPFD_CLOEXEC, 5) }
++            }
++        #else
++            throw WASIAbi.Errno.ENOTSUP
++        #endif
++    }
++
++    private func firstFreeProcessDescriptor(in table: FdTable, excluding: UInt32? = nil) throws -> UInt32 {
++        for descriptor in 0...UInt32(Int32.max) where descriptor != excluding && table[descriptor] == nil {
++            return descriptor
++        }
++        throw WASIAbi.Errno.EMFILE
++    }
++}
+diff --git a/Sources/WASI/WASI.swift b/Sources/WASI/WASI.swift
+index e915c97..d820e56 100644
+--- a/Sources/WASI/WASI.swift
++++ b/Sources/WASI/WASI.swift
+@@ -998,24 +998,26 @@ final class WASIImplementation: Sendable {
+
+     /// Close a file descriptor.
+     func fd_close(fd: WASIAbi.Fd) throws {
+-        NSLog("WK fd_close (internal): \(fd)")
+-        let entry = try fdTable.withLock { table -> FdEntry in
+-            guard let entry = table[fd] else {
+-                throw WASIAbi.Errno.EBADF
++        try withDescriptorTransfer {
++            NSLog("WK fd_close (internal): \(fd)")
++            let entry = try fdTable.withLock { table -> FdEntry in
++                guard let entry = table[fd] else {
++                    throw WASIAbi.Errno.EBADF
++                }
++                table[fd] = nil
++                return entry
+             }
+-            table[fd] = nil
+-            return entry
++            NSLog("WK fd_close (internal): \(entry)")
++            // A borrowed entry (e.g. process stdio) wraps a resource the embedder
++            // owns and outlives the guest: the descriptor leaves the guest's table,
++            // but the resource behind it stays open.
++            let closingEntry = entry.asEntry()
++            guard !closingEntry.isBorrowed else { return }
++            #if os(iOS)
++                if closingEntry.hostFileDescriptor == 4 { return } // Do not close /dev/tty.
++            #endif
++            try closingEntry.close()
+         }
+-        NSLog("WK fd_close (internal): \(entry)")
+-        // A borrowed entry (e.g. process stdio) wraps a resource the embedder
+-        // owns and outlives the guest: the descriptor leaves the guest's table,
+-        // but the resource behind it stays open.
+-        let closingEntry = entry.asEntry()
+-        guard !closingEntry.isBorrowed else { return }
+-        #if os(iOS)
+-        if (closingEntry.hostFileDescriptor == 4) { return } // Do not close /dev/tty
+-        #endif
+-        try closingEntry.close()
+     }
+
+     /// Synchronize the data of a file to disk.
+@@ -1197,10 +1199,8 @@ final class WASIImplementation: Sendable {
+             guard case .directory(let entry) = table[fd],
+                 let preopenPath = entry.preopenPath
+             else {
+-                NSLog("WK fd_prestat_get: throwing EBADF, entry is not a directory")
+                 throw WASIAbi.Errno.EBADF
+             }
+-            NSLog("WK fd_prestat_get: found preopenPath \(preopenPath)")
+             return preopenPath
+         }
+         NSLog("WK fd_prestat_get: calling PrestatDir")
+@@ -1215,10 +1215,8 @@ final class WASIImplementation: Sendable {
+             guard case .directory(let entry) = table[fd],
+                 let preopenPath = entry.preopenPath
+             else {
+-                NSLog("WK fd_prestat_dir_name (2) throwing EBADF")
+                 throw WASIAbi.Errno.EBADF
+             }
+-            NSLog("WK fd_prestat_dir_name (2): found preopenPath \(String(preopenPath))")
+             return preopenPath
+         }
+
+@@ -1366,7 +1364,6 @@ final class WASIImplementation: Sendable {
+
+         let dirEntry = try fdTable.withLock { table -> any WASIDir in
+             guard case .directory(let dirEntry) = table[fd] else {
+-                NSLog("WK fd_readdir: unknown directory")
+                 throw WASIAbi.Errno.EBADF
+             }
+             return dirEntry
+@@ -1376,24 +1373,28 @@ final class WASIImplementation: Sendable {
+
+     /// Atomically replace a file descriptor by renumbering another file descriptor.
+     func fd_renumber(fd: WASIAbi.Fd, to toFd: WASIAbi.Fd) throws {
+-        let toClose = try fdTable.withLock { table -> FdEntry? in
+-            guard let entry = table[fd] else {
+-                throw WASIAbi.Errno.EBADF
++        try withDescriptorTransfer {
++            let toClose = try fdTable.withLock { table -> FdEntry? in
++                guard let entry = table[fd] else {
++                    throw WASIAbi.Errno.EBADF
++                }
++                guard let toEntry = table[toFd] else {
++                    throw WASIAbi.Errno.EBADF
++                }
++                // Renumbering a descriptor onto itself leaves it in place; clearing
++                // the source would otherwise destroy the entry it just installed.
++                guard fd != toFd else { return nil }
++                table[toFd] = entry
++                table[fd] = nil
++                return toEntry
+             }
+-            guard let toEntry = table[toFd] else {
+-                throw WASIAbi.Errno.EBADF
+-            }
+-            // Renumbering a descriptor onto itself leaves it in place; clearing
+-            // the source would otherwise destroy the entry it just installed.
+-            guard fd != toFd else { return nil }
+-            table[toFd] = entry
+-            table[fd] = nil
+-            return toEntry
++            // A borrowed resource is left open, as in `fd_close`.
++            guard let closingEntry = toClose?.asEntry(), !closingEntry.isBorrowed else { return }
++            #if os(iOS)
++                if closingEntry.hostFileDescriptor == 4 { return } // Do not close /dev/tty.
++            #endif
++            try closingEntry.close()
+         }
+-        // The displaced entry may be borrowed, in which case it is dropped from
+-        // the table but its resource is left open, as in `fd_close`.
+-        guard let closingEntry = toClose?.asEntry(), !closingEntry.isBorrowed else { return }
+-        try closingEntry.close()
+     }
+
+     /// Move the offset of a file descriptor.
+@@ -1584,10 +1585,9 @@ final class WASIImplementation: Sendable {
+
+     /// Open a file or directory.
+     ///
+-    /// Lookup, open, and push share one `fdTable` lock scope: the new entry holds
+-    /// non-Sendable existentials, so it must be built inside the closure to satisfy
+-    /// the lock's `sending` requirement. A full table is rejected before the open,
+-    /// so a successful open is never orphaned by a failing install.
++    /// Shared bridges serialize lookup, open, and push so the directory cannot
++    /// close or the table fill during an open. The single-threaded iOS command
++    /// bridge instead rolls back a failed install, leaving a blocking open interruptible.
+     func path_open(
+         dirFd: WASIAbi.Fd,
+         dirFlags: WASIAbi.LookupFlags,
+@@ -1597,7 +1597,24 @@ final class WASIImplementation: Sendable {
+         fsRightsInheriting: WASIAbi.Rights,
+         fdflags: WASIAbi.Fdflags
+     ) throws -> WASIAbi.Fd {
+-        try fdTable.withLock { table in
++        #if os(iOS)
++            if let host = fileSystem as? HostFileSystem, host.opensOnSingleCommandThread {
++                // Like fd_read, borrow the directory from this invocation's table
++                // without holding the lock across a blocking host syscall.
++                let directory = try fdTable.withLock { table -> any WASIDir in
++                    guard case .directory(let entry) = table[dirFd] else { throw WASIAbi.Errno.ENOTDIR }
++                    guard table.hasCapacity else { throw WASIAbi.Errno.ENFILE }
++                    return entry
++                }
++                return try host.openAt(
++                    dirFd: directory, path: path, oflags: oflags, fsRightsBase: fsRightsBase,
++                    fdflags: fdflags, symlinkFollow: dirFlags.contains(.SYMLINK_FOLLOW)
++                ) { entry in
++                    try fdTable.withLock { try $0.push(entry) }
++                }
++            }
++        #endif
++        return try fdTable.withLock { table in
+             NSLog("WK path_open: path = \(path) oflags: \(oflags) fdflags: \(fdflags) dirFd: \(dirFd) fsRightsBase: \(fsRightsBase)")
+             guard case .directory(let dirEntry) = table[dirFd] else {
+                 throw WASIAbi.Errno.ENOTDIR
+diff --git a/Sources/WASI/WASIBridgeToHost.swift b/Sources/WASI/WASIBridgeToHost.swift
+index ff9a537..7badc86 100644
+--- a/Sources/WASI/WASIBridgeToHost.swift
++++ b/Sources/WASI/WASIBridgeToHost.swift
+@@ -52,6 +52,12 @@ public final class WASIBridgeToHost: Sendable {
+             return FileSystemOptions(factory: { HostFileSystem() })
+         }
+
++        /// Uses an interruptible host open on a single command thread. The embedder
++        /// must not operate on this bridge concurrently with the guest.
++        @_spi(WASIPlatform) public static func hostForCommandThread() -> FileSystemOptions {
++            return FileSystemOptions(factory: { HostFileSystem(opensOnSingleCommandThread: true) })
++        }
++
+         /// Creates file system options that use an in-memory file system.
+         ///
+         /// - Parameter fileSystem: A pre-configured `MemoryFileSystem` instance.
+@@ -170,13 +176,15 @@ public final class WASIBridgeToHost: Sendable {
+     /// guest-opened files that were not closed by the WASI program).
+     /// Borrowed descriptors (e.g. process stdio) are left open.
+     public func close() throws {
+-        let shouldClose = isClosed.withLock { closed -> Bool in
+-            if closed { return false }
+-            closed = true
+-            return true
++        try withDescriptorTransfer {
++            let shouldClose = isClosed.withLock { closed -> Bool in
++                if closed { return false }
++                closed = true
++                return true
++            }
++            guard shouldClose else { return }
++            try underlying.close()
+         }
+-        guard shouldClose else { return }
+-        try underlying.close()
+     }
+
+     /// Passes the bridge to `body`, then closes all owned file descriptors

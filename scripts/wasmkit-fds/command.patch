@@ -1,0 +1,241 @@
+diff --git a/WasmKitCommand.swift b/WasmKitCommand.swift
+index 15c9dad..6124445 100644
+--- a/WasmKitCommand.swift
++++ b/WasmKitCommand.swift
+@@ -6,7 +6,7 @@
+ //
+ internal import WasmKit
+ internal import WasmKitWASI
+-internal import WASI
++@_spi(WASIPlatform) internal import WASI
+ internal import WAT
+ import Foundation
+ internal import SystemPackage
+@@ -78,7 +78,7 @@ final class TTYBridge {
+     }
+ }
+
+-// Host side of ashell_v1 process_spawn and process_wait. The native runtime
++// Host side of ashell_v1 process and descriptor imports. The native runtime
+ // reserves worker PIDs until reap; this bridge limits waits to this guest.
+ private final class ProcessBridge {
+     private enum ABIError: Int32, Error {
+@@ -91,7 +91,10 @@ private final class ProcessBridge {
+             var key = pthread_key_t()
+             let error = pthread_key_create(&key) { pointer in
+                 let cleanup = Unmanaged<ThreadCleanup>.fromOpaque(pointer).takeRetainedValue()
+-                for bridge in cleanup.active { bridge.retireRemainingChildren() }
++                for bridge in cleanup.active {
++                    bridge.retireRemainingChildren()
++                    try? bridge.wasi.close()
++                }
+             }
+             return error == 0 ? key : nil
+         }()
+@@ -113,17 +116,30 @@ private final class ProcessBridge {
+         }
+     }
+
++    let wasi: WASIBridgeToHost
+     private let directory: String
+     private let environment: [String: String]
+     private var children: Set<pid_t> = []
+     private weak var threadCleanup: ThreadCleanup?
+     private let maxBytes = 256 * 1024
+
+-    init(directory: String, environment: [String: String]) {
++    private init(wasi: WASIBridgeToHost, directory: String, environment: [String: String]) {
++        self.wasi = wasi
+         self.directory = directory
+         self.environment = environment
+     }
+
++    static func make(directory: String, environment: [String: String],
++                     wasi: () throws -> WASIBridgeToHost) throws -> ProcessBridge {
++        try withoutCancellation {
++            let cleanup = try ThreadCleanup.current()
++            let bridge = ProcessBridge(wasi: try wasi(), directory: directory, environment: environment)
++            cleanup.active.append(bridge)
++            bridge.threadCleanup = cleanup
++            return bridge
++        }
++    }
++
+     func link(to imports: inout Imports, store: Store) {
+         imports.define(module: "ashell_v1", name: "process_spawn",
+                        Function(store: store, parameters: Array(repeating: .i32, count: 10), results: [.i32]) { caller, args in
+@@ -135,12 +151,38 @@ private final class ProcessBridge {
+                 try self.wait(memory: $0, child: Int32(bitPattern: args[0].i32), flags: args[1].i32, output: args[2].i32)
+             }
+         })
++        imports.define(module: "ashell_v1", name: "process_pipe",
++                       Function(store: store, parameters: [.i32], results: [.i32]) { caller, args in
++            self.call(caller: caller) { memory in
++                let output = args[0].i32
++                guard output != 0 else { throw ABIError.fault }
++                try self.check(memory, offset: output, length: 8)
++                return try Self.withoutCancellation {
++                    let pair = try self.wasi.createProcessPipe()
++                    self.write(pair.read, to: memory, at: output)
++                    self.write(pair.write, to: memory, at: output + 4)
++                    return 0
++                }
++            }
++        })
++        imports.define(module: "ashell_v1", name: "process_dup2",
++                       Function(store: store, parameters: [.i32, .i32], results: [.i32]) { caller, args in
++            self.call(caller: caller) { _ in
++                let source = args[0].i32, target = args[1].i32
++                guard source <= UInt32(Int32.max), target <= UInt32(Int32.max) else { throw WASIAbi.Errno.EBADF }
++                return try Self.withoutCancellation {
++                    try self.wasi.duplicateProcessDescriptor(source, to: target)
++                    return 0
++                }
++            }
++        })
+     }
+
+     private func call(caller: borrowing Caller, _ body: (Memory) throws -> Int32) -> [Value] {
+         guard let memory = caller.instance?.exports[memory: "memory"] else { return [.i32(UInt32(bitPattern: -21))] }
+         do { return [.i32(UInt32(bitPattern: try body(memory)))] }
+         catch let error as ABIError { return [.i32(UInt32(bitPattern: -error.rawValue))] }
++        catch let error as WASIAbi.Errno { return [.i32(UInt32(bitPattern: -Int32(error.rawValue)))] }
+         catch { return [.i32(UInt32(bitPattern: -29))] }
+     }
+
+@@ -183,11 +225,48 @@ private final class ProcessBridge {
+         }
+     }
+
++    private func childDescriptors(memory: Memory, offset: UInt32, count: Int) throws -> [UInt32] {
++        guard count <= 4096 else { throw ABIError.tooBig }
++        try check(memory, offset: offset, length: count * 12)
++        var aliases: [UInt32: UInt32] = [:]
++        var closed: Set<UInt32> = []
++        if count > 0 {
++            try memory.withUnsafeBufferPointer(offset: UInt(offset), count: count * 12) { bytes in
++                for index in 0..<count {
++                    let action = index * 12
++                    let operation = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: action, as: UInt32.self))
++                    let source = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: action + 4, as: UInt32.self))
++                    let target = UInt32(littleEndian: bytes.loadUnaligned(fromByteOffset: action + 8, as: UInt32.self))
++                    guard source <= UInt32(Int32.max) else { throw WASIAbi.Errno.EBADF }
++                    switch operation {
++                    case 1: // dup2
++                        guard target <= UInt32(Int32.max) else { throw WASIAbi.Errno.EBADF }
++                        guard target < 3 else { throw ABIError.unsupported }
++                        let original = aliases[source] ?? source
++                        guard !closed.contains(source), wasi.containsProcessDescriptor(original) else {
++                            throw WASIAbi.Errno.EBADF
++                        }
++                        aliases[target] = original
++                        closed.remove(target)
++                    case 2: // close
++                        aliases.removeValue(forKey: source)
++                        closed.insert(source)
++                    default: throw ABIError.invalid
++                    }
++                }
++            }
++        }
++        return try (0..<3).map { (target: UInt32) in
++            guard !closed.contains(target) else { throw ABIError.unsupported }
++            return aliases[target] ?? target
++        }
++    }
++
+     private func spawn(memory: Memory, arguments: [UInt32]) throws -> Int32 {
+         let flags = arguments[8]
+         guard flags & ~3 == 0, arguments[3] != 0, flags & 2 == 0 || arguments[5] == 0 else { throw ABIError.invalid }
+-        guard arguments[7] == 0 else { throw ABIError.unsupported }
+         let output = arguments[9]
++        guard output != 0 else { throw ABIError.fault }
+         try check(memory, offset: output, length: 4)
+         let path = try string(memory, offset: arguments[0], length: Int(arguments[1]))
+         let argv = try vector(memory, offset: arguments[2], count: Int(arguments[3]))
+@@ -209,11 +288,15 @@ private final class ProcessBridge {
+         let variables = env.map { strdup($0) }
+         defer { args.forEach { free($0) }; variables.forEach { free($0) } }
+         guard !args.contains(nil), !variables.contains(nil) else { return wasiError(ENOMEM) }
+-        return try withoutCancellation {
+-            if threadCleanup == nil {
+-                let cleanup = try ThreadCleanup.current()
+-                cleanup.active.append(self)
+-                threadCleanup = cleanup
++        return try Self.withoutCancellation {
++            let guestFDs = try childDescriptors(memory: memory, offset: arguments[6], count: Int(arguments[7]))
++            var hostFDs: [CInt] = []
++            defer { hostFDs.forEach { _ = close($0) } }
++            for (target, descriptor) in guestFDs.enumerated() {
++                let fd = try wasi.duplicateProcessHostDescriptor(descriptor, writing: target != 0)
++                hostFDs.append(fd)
++                let error = ios_posix_spawn_file_actions_adddup2(&actions, fd, CInt(target))
++                guard error == 0 else { return wasiError(error) }
+             }
+             var child: pid_t = 0
+             let error = (args + [nil]).withUnsafeBufferPointer { args in
+@@ -230,12 +313,13 @@ private final class ProcessBridge {
+
+     private func wait(memory: Memory, child: pid_t, flags: UInt32, output: UInt32) throws -> Int32 {
+         guard flags & ~1 == 0 else { throw ABIError.invalid }
++        guard output != 0 else { throw ABIError.fault }
+         try check(memory, offset: output, length: 4)
+         repeat {
+             let candidates = child == -1 ? children : (children.contains(child) ? [child] : [])
+             if candidates.isEmpty { return wasiError(ECHILD) }
+             for candidate in candidates {
+-                let (result, status, error) = withoutCancellation {
++                let (result, status, error) = Self.withoutCancellation {
+                     var status: Int32 = 0
+                     let result = ios_wait4(candidate, &status, WNOHANG, nil, nil)
+                     let error = result < 0 ? errno : 0
+@@ -256,7 +340,7 @@ private final class ProcessBridge {
+         } while true
+     }
+
+-    private func withoutCancellation<T>(_ body: () throws -> T) rethrows -> T {
++    private static func withoutCancellation<T>(_ body: () throws -> T) rethrows -> T {
+         var previous: Int32 = 0
+         pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous)
+         defer { pthread_setcancelstate(previous, nil) }
+@@ -264,7 +348,7 @@ private final class ProcessBridge {
+     }
+
+     func finish() {
+-        withoutCancellation {
++        Self.withoutCancellation {
+             retireRemainingChildren()
+             threadCleanup?.active.removeAll { $0 === self }
+             threadCleanup = nil
+@@ -355,19 +439,18 @@ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer
+             let currentDirectory = FileManager().currentDirectoryPath
+             let tty = TTYBridge()
+             defer { tty.restore() }
+-            let processes = ProcessBridge(directory: currentDirectory, environment: environment)
+-            let wasi = try WASIBridgeToHost(args: arguments,
+-                                            environment: environment,
+-                                            fileSystem: .host().withStdio(stdin:  fileno(thread_stdin),
+-                                                                          stdout:  fileno(thread_stdout),
+-                                                                          stderr:  fileno(thread_stderr))
+-                                                // Stdio is already mapped above. The extension sandbox denies
+-                                                // opening /dev itself; requiring it would abort even hello.
+-                                                .withPreopens([.init(guestPath: "/", hostPath: "/")])
+-            )
+-            // Start the WASI command-line application and close the bridge.
+-            let exitCode = try wasi.runAndClose { wasi in
+-                defer { processes.finish() }
++            let processes = try ProcessBridge.make(directory: currentDirectory, environment: environment) {
++                try WASIBridgeToHost(args: arguments,
++                                     environment: environment,
++                                     fileSystem: .hostForCommandThread()
++                                         .withStdio(stdin: fileno(thread_stdin), stdout: fileno(thread_stdout),
++                                                    stderr: fileno(thread_stderr))
++                                         // Stdio is mapped above. The extension sandbox denies opening /dev.
++                                         .withPreopens([.init(guestPath: "/", hostPath: "/")]))
++            }
++            // Keep TLS registration until runAndClose has released the descriptor table.
++            defer { processes.finish() }
++            let exitCode = try processes.wasi.runAndClose { wasi in
+                 // Create engine and store
+                 let engine = Engine()
+                 let store = Store(engine: engine)

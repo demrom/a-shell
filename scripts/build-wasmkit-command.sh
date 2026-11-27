@@ -74,6 +74,12 @@ source="$stage/source"
 mkdir -p "$source/WasmKit"
 tar -xzf "$downloads/WasmKitCommand-$wrapper.tar.gz" --strip-components 1 -C "$source"
 tar -xzf "$downloads/WasmKit-$engine.tar.gz" --strip-components 1 -C "$source/WasmKit"
+# Replay the reviewed deltas on immutable snapshots. Ignore the parent checkout:
+# git apply can otherwise skip every path under its untracked .build directory.
+(cd "$source/WasmKit" && GIT_DIR=/dev/null git apply --check "$root/scripts/wasmkit-fds/engine.patch" &&
+    GIT_DIR=/dev/null git apply "$root/scripts/wasmkit-fds/engine.patch")
+(cd "$source" && GIT_DIR=/dev/null git apply --check "$root/scripts/wasmkit-fds/command.patch" &&
+    GIT_DIR=/dev/null git apply "$root/scripts/wasmkit-fds/command.patch")
 unzip -q "$stage/ios_system.xcframework.zip" -d "$source"
 
 name=WasmKitCommand
@@ -152,6 +158,9 @@ if "$smoke"; then
     -F"$frameworks" -framework ios_system -framework Foundation \
     -Wl,-rpath,@executable_path/Frameworks -o "$app/WasmKitSmoke"
   xxd -r -p "$root/tests/wasmkit/hello.hex" "$app/hello.wasm"
+  xxd -r -p "$root/tests/wasmkit/pipe.hex" "$app/pipe.wasm"
+  printf '80f9a8e6b15ad6ce26472a63caa6dc5e27fb64c33e7df8f9e441f87ce6cf402d  %s\n' \
+    "$app/pipe.wasm" | shasum -a 256 -c -
   cp "$root/tests/wasmkit/Info.plist" "$root/tests/wasmkit/commandDictionary.plist" "$app/"
   codesign --force --sign - "$frameworks/$name.framework"
   codesign --force --sign - "$frameworks/ios_system.framework"
@@ -172,6 +181,7 @@ if "$smoke"; then
   tee <"$dist/hello.stdout"
   tee <"$dist/hello.stderr" >&2
   test "$status" = 0
-  diff -u <(printf 'Hello from WASI!\n') "$dist/hello.stdout"
+  diff -u <(printf 'Hello from WASI!\nprocess-pipe-ok\n') "$dist/hello.stdout"
   grep -Fxq 'wasmkit hello.wasm: status=0' "$dist/hello.stderr"
+  grep -Fxq 'wasmkit pipe.wasm: status=0' "$dist/hello.stderr"
 fi

@@ -14,9 +14,11 @@ int main(void) {
         thread_stdin = stdin;
         thread_stdout = stdout;
         thread_stderr = stderr;
-        int status = ios_system("wasmkit hello.wasm");
+        int helloStatus = ios_system("wasmkit hello.wasm");
+        fprintf(stderr, "wasmkit hello.wasm: status=%d\n", helloStatus);
+        int pipeStatus = ios_system("wasmkit pipe.wasm");
+        fprintf(stderr, "wasmkit pipe.wasm: status=%d\n", pipeStatus);
         ios_closeSession(session);
-        fprintf(stderr, "wasmkit hello.wasm: status=%d\n", status);
-        return status != 0;
+        return helloStatus != 0 || pipeStatus != 0;
     }
 }
