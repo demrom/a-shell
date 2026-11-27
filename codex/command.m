@@ -510,6 +510,10 @@ static void *execute_tool(void *context) {
         // ios_fork allocates the child's private environment and holds pid_mtx until
         // command registration. Never return between allocation and ios_execve.
         pid_t pid = ios_fork();
+        if (pid < 0) {
+            call->error = errno;
+            goto finished;
+        }
         ios_execve(call->argv[0], call->argv, call->env);
         ios_waitpid(pid);
         ashell_wait_owned_streams(registration);

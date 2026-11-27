@@ -188,6 +188,7 @@ final class AgentsTerminal {
         ios_settty(nil)
         ios_setDirectoryURL(URL(fileURLWithPath: cwd))
         let pid = ios_fork()
+        guard pid > 0 else { return (-1, Data("Cannot start command: process table full\n".utf8)) }
         ios_system(command.decomposedStringWithCanonicalMapping)
         ios_waitpid(pid)
         let code = ios_getCommandStatus()

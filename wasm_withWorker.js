@@ -42,7 +42,17 @@ function executeWebAssembly(bufferString, args, cwd, tty, env) {
 	wasmWorker.onmessage =(e) => {
 		// system calls go through the "prompt()" command
 		// Easiest way to make it synchronous
-		if (e.data[0] == "prompt") {
+		if (e.data[0] == "processPrompt") {
+			// Process replies are bounded and use a separate mailbox from legacy I/O.
+			const buffer = e.data[2];
+			const status = new Int32Array(buffer, 0, 1);
+			const bytes = new Uint8Array(buffer, 4);
+			const reply = new TextEncoder().encode(prompt(e.data[1]) ?? "");
+			const length = reply.length <= bytes.length ? reply.length : 0;
+			bytes.set(reply.subarray(0, length));
+			Atomics.store(status, 0, length + 1);
+			Atomics.notify(status, 0);
+		} else if (e.data[0] == "prompt") {
 			sharedArray[0] = 0;
 			Atomics.store(sharedArray, 0, 0);
 			result = prompt(e.data[1]);

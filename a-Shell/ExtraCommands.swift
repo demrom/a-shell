@@ -2597,6 +2597,10 @@ public func wasmkitUnavailable(argc: Int32, argv: UnsafeMutablePointer<UnsafeMut
 public func executeCommandAndWait(command: String) {
     NSLog("executeCommandAndWait: \(command)")
     let pid = ios_fork()
+    guard pid > 0 else {
+        fputs("Cannot start command: process table full\n", thread_stderr)
+        return
+    }
     _ = ios_system(command.decomposedStringWithCanonicalMapping)
     fflush(thread_stdout)
     ios_waitpid(pid)
