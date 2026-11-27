@@ -20,7 +20,6 @@ steps=$(mktemp)
 diagnostics=${HERDR_TEST_LOG_DIR:-}
 started=$(date '+%Y-%m-%d %H:%M:%S')
 if [[ -n $diagnostics ]]; then mkdir -p "$diagnostics"; fi
-observers=()
 
 record_phase() {
 	if [[ -n $diagnostics ]]; then
@@ -33,38 +32,6 @@ record_phase() {
 
 input_time() {
 	perl -MTime::HiRes=time -e 'printf "%.3f", time'
-}
-
-capture_ui() {
-	local phase=$1 status=0
-	printf '%s %s capture start\n' "$(input_time)" "$phase" >> "$diagnostics/input-timing.log"
-	# The full AXe tree includes the root PID. Bound the read independently of input.
-	perl -e 'alarm shift; exec @ARGV or die $!' 45 axe describe-ui --udid "$sim" \
-		> "$diagnostics/$phase.ax.json" 2> "$diagnostics/$phase.ax.stderr" || status=$?
-	printf '%s %s capture exit=%s\n' "$(input_time)" "$phase" "$status" >> "$diagnostics/input-timing.log"
-}
-
-observe_first_tap() {
-	local deadline=$((SECONDS + 30)) sends snapshot=
-	while ((SECONDS < deadline)); do
-		sends=$(grep -cF 'HID event performed successfully.' "$diagnostics/hid-onboarding.stderr" || true)
-		if [[ -z $snapshot && $sends -ge 1 ]]; then
-			printf '%s first tap HID send reported\n' "$(input_time)" >> "$diagnostics/input-timing.log"
-			capture_ui after-tap &
-			snapshot=$!
-		fi
-		if [[ $sends -ge 2 ]]; then
-			printf '%s first key HID send reported\n' "$(input_time)" >> "$diagnostics/input-timing.log"
-			break
-		fi
-		[[ ! -s $diagnostics/onboarding.done ]] || break
-		sleep 0.1
-	done
-	if [[ -n $snapshot ]]; then
-		wait "$snapshot" || true
-	else
-		printf '%s first tap HID send unobserved\n' "$(input_time)" >> "$diagnostics/input-timing.log"
-	fi
 }
 
 run_batch() {
@@ -81,13 +48,91 @@ run_batch() {
 	return "$status"
 }
 
+before_focus_deadline() {
+	local remaining=$(($1 - SECONDS))
+	shift
+	((remaining > 0)) || return 124
+	if ((remaining > 25)); then remaining=25; fi
+	perl -e 'alarm shift; exec @ARGV or die $!' "$remaining" "$@"
+}
+
+terminal_responder() {
+	# An in-app AX tree (or a successful HID send) alone cannot prove keyboard focus.
+	local predicate='(category == "KeyboardSceneDelegate" AND composedMessage CONTAINS "_inputViewsForResponder: <") OR (category == "Client" AND composedMessage CONTAINS "resignFirstResponder")'
+	before_focus_deadline "$1" xcrun simctl spawn "$sim" log show \
+		--info --start "$started" --style compact --process "$host_pid" --predicate "$predicate" |
+		awk '/_inputViewsForResponder:|resignFirstResponder/ { last = $0 } END { print last }'
+}
+
+focus_terminal() {
+	local phase=$1 tap_required=$2 deadline=$((SECONDS + 90)) tapped=0 closed='' tree='' tip latest=''
+	local prior='' stable_since=0
+	local x=130 y=260
+	while ((SECONDS < deadline)); do
+		if tree=$(before_focus_deadline "$deadline" axe describe-ui --udid "$sim") &&
+			jq -e --argjson pid "$host_pid" --argjson x "$x" --argjson y "$y" '
+				any(.. | objects; .type? == "TextArea" and .pid == $pid and .enabled == true and
+					(.frame | .x <= $x and .x + .width > $x and .y <= $y and .y + .height > $y))' <<<"$tree" >/dev/null; then
+			if jq -e 'any(.. | objects; .AXUniqueId? == "PopoverDismissRegion")' <<<"$tree" >/dev/null; then
+				stable_since=0
+				# Closing Extra keys can expose the app's next toolbar tip. Tap only the single
+				# Close button on a tree with one of these known headings.
+				if tip=$(jq -er '
+					[.. | objects] as $nodes |
+					select([$nodes[] | select(.type? == "Button" and .AXUniqueId == "xmark.circle.fill")] |
+						length == 1 and .[0].enabled == true and .[0].AXLabel == "Close") |
+					[$nodes[] | select(.type? == "Heading") | .AXLabel |
+						if . == "Extra keys: tab, control, escape, paste and the four arrows" then "extra-keys"
+						elif . == "Arrows: flick to move once, keep holding to repeat" then "arrows" else empty end] |
+					unique | select(length == 1) | first' <<<"$tree") && [[ $tip != "$closed" ]]; then
+					if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-$tip.ax.json"; fi
+					if before_focus_deadline "$deadline" axe tap --udid "$sim" --id xmark.circle.fill --element-type Button; then
+						printf 'Dismissed toolbar tip: %s\n' "$tip"
+						closed=$tip
+						tapped=0
+						tap_required=1
+					fi
+				fi
+			else
+				closed=
+				if ! latest=$(terminal_responder "$deadline"); then latest=''; fi
+				if ((tap_required == 0)) && [[ $latest == *'_inputViewsForResponder: <'*'.ConfirmingTerminalView: '* ]]; then
+					# A tap on an already focused terminal need not emit a new UIKit event.
+					# Require the same responder and an unobstructed tree across a quiet window.
+					if ((stable_since == 0)) || [[ $latest != "$prior" ]]; then
+						stable_since=$SECONDS
+						prior=$latest
+					elif ((SECONDS - stable_since >= 5)); then
+						if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-focused.ax.json"; fi
+						printf 'Herdr terminal first responder (%s): %s\n' "$phase" "$latest"
+						return 0
+					fi
+				else
+					stable_since=0
+				fi
+				if ((tapped == 0 && stable_since == 0)); then
+					if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-before-tap.ax.json"; fi
+					before_focus_deadline "$deadline" axe tap --udid "$sim" -x "$x" -y "$y" || return
+					tapped=1
+					tap_required=0
+				fi
+			fi
+		else
+			stable_since=0
+		fi
+		sleep 0.3
+	done
+	if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-focus-timeout.ax.json"; fi
+	printf 'Herdr terminal did not gain first responder (%s): %s\n' "$phase" "$latest" >&2
+	return 1
+}
+
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
 # shellcheck disable=SC2329
 finish() {
 	local status=$? name pane file log_index=0
 	local predicate='process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")'
 	if [[ -n $diagnostics ]]; then
-		for name in "${observers[@]+${observers[@]}}"; do wait "$name" || true; done
 		record_phase "fixture exit $status" || true
 		cp -R "$receipts" "$diagnostics/fixtures" || true
 		while IFS= read -r -d '' file; do
@@ -170,6 +215,10 @@ if [[ ${4:-} == --confirm-open ]]; then
 fi
 launch=$(xcrun simctl launch "$sim" "$bundle")
 host_pid=${launch##*: }
+if [[ ! $host_pid =~ ^[1-9][0-9]*$ ]]; then
+	printf 'Could not read Simulator app PID: %s\n' "$launch" >&2
+	exit 1
+fi
 record_phase "start Herdr from host $host_pid" || true
 xcrun simctl openurl "$sim" "$scheme:herdr"
 # A newly booted Simulator can take longer than a fixed delay to launch the
@@ -187,19 +236,11 @@ record_phase 'first worker observed' || true
 # Fresh Herdr opens its welcome dialog; Return continues to optional agent
 # settings, and Escape closes settings without installing integrations.
 # Without this, the first command's Return only advances onboarding.
-printf 'sleep 2\ntap -x 130 -y 260\nsleep 1\nkey 40\nsleep 1\nkey 41\nsleep 1\n' >"$steps"
-if [[ -n $diagnostics ]]; then
-	: > "$diagnostics/hid-onboarding.stderr"
-	: > "$diagnostics/onboarding.done"
-	capture_ui before-tap &
-	observers+=("$!")
-	observe_first_tap &
-	observers+=("$!")
-fi
-onboarding_status=0
-run_batch onboarding || onboarding_status=$?
-if [[ -n $diagnostics ]]; then printf '%s\n' "$onboarding_status" > "$diagnostics/onboarding.done" || true; fi
-if ((onboarding_status != 0)); then exit "$onboarding_status"; fi
+sleep 2
+focus_terminal onboarding 1
+printf 'key 40\nsleep 1\nkey 41\nsleep 1\n' >"$steps"
+run_batch onboarding
+focus_terminal pane-input 0
 record_phase 'onboarding keys sent' || true
 pids=()
 failed=0
