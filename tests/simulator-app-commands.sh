@@ -1,5 +1,5 @@
 #!/bin/bash
-# Run the existing app command fixtures through the installed app's public URL route.
+# Run the existing app command fixtures through the installed app.
 set -euo pipefail
 sim=${1:?Pass a Simulator UDID}
 bundle=${2:?Pass the app bundle identifier}
@@ -28,17 +28,26 @@ esac
 
 # Start the system Photos service before the first permission prompt.
 if [[ $mode == photos ]]; then xcrun simctl launch "$sim" com.apple.mobileslideshow; fi
-# First contact may display the public Open-in confirmation. The existing URL
-# consumer handles it, then ordinary calls use the same authorized route.
-bash "$root/url-logging/check.sh" "$sim" "$bundle" --confirm-open
+if [[ $mode != bundled-font ]]; then
+    # First contact may display the public Open-in confirmation.
+    bash "$root/url-logging/check.sh" "$sim" "$bundle" --confirm-open
+fi
 open_command() {
     local encoded
     encoded=$(jq -nr --arg command "$1" '$command | @uri')
     xcrun simctl openurl "$sim" "ashellmini:$encoded"
 }
 check_command() {
-    local name=$1 count
-    open_command "dash -c 'cd \"\$HOME/Documents/ashell-ci\" && dash $name.sh > $name.stdout 2> $name.stderr; echo \$? > $name.status'" || return
+    local name=$1 command count
+    command="dash -c 'cd \"\$HOME/Documents/ashell-ci\" && dash $name.sh > $name.stdout 2> $name.stderr; echo \$? > $name.status'"
+    if [[ $mode == bundled-font ]]; then
+        # The font check needs a cold launch with UIAppFonts, independently
+        # of SpringBoard's command URL confirmation on a new Simulator.
+        printf '%s\n' "$command" > "$documents/.profile" || return
+        xcrun simctl launch "$sim" "$bundle" || return
+    else
+        open_command "$command" || return
+    fi
     for ((count=0; count<300; count++)); do
         if [[ -s "$work/$name.status" ]]; then
             if grep -Fxq 0 "$work/$name.status"; then return 0; fi
