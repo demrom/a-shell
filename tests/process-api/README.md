@@ -68,6 +68,10 @@ State is local to the guest. Alarm delivery is cooperative at signal calls, not 
 
 For readiness error isolation, build `signal-pending.c` with `-D_WASI_EMULATED_SIGNAL`, `process.c` and `signals.c`. Run `node --no-warnings tests/process-api/signal-pending-host.cjs signal-pending.wasm`. The harness uses real Preview 1 and an older broker boundary that rejects PEEK. Expect `process-signal-pending-ok`, status 0, and empty stderr: an expired alarm wakes suspend, and successful unmask delivers a second pending alarm without leaking the probe's errno. This does not send or subscribe to host signals, stop or resume guests, or queue real-time signals.
 
+## Preview 1 account lookup
+
+`accounts.c` supplies an empty POSIX account database: WASI Preview 1 exposes no account names, so user/group lookup by name or numeric ID returns NULL without changing errno. Build `tests/process-api/accounts.c` with `wasm-process/accounts.c` and the overlay include path; the result has no a-Shell host imports and must print `process-accounts-empty-ok`, status 0 and empty stderr.
+
 ## Restricted `fork` and `vfork`
 
 Use stock SDK 34 and Binaryen 133. Build single-threaded wasm32 C modules with the fork overlay and export the compiler stack pointer before transforming all paths that can reach `process_fork`:
