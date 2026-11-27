@@ -31,7 +31,9 @@ for bytes in 872767 1048576 4194304; do
         --data-binary "awk 'BEGIN { for (i = 0; i < $bytes; i++) printf \"x\" }'" \
         "$RELAY_URL/run" > "$work/large-result"
     jq -e --argjson bytes "$bytes" '(.stdout | utf8bytelength) == $bytes and .stderr == "" and .status == 0' "$work/large-result"
+    printf 'Checking relay recovery after %s bytes\n' "$bytes"
     request --fail --max-time 2 --header "X-Token: $RELAY_TOKEN" \
+        --write-out '%{onerror}%{stderr}relay recovery: ip=%{remote_ip} tcp=%{time_connect} tls=%{time_appconnect} first_byte=%{time_starttransfer} total=%{time_total} HTTP=%{http_code}\n' \
         --data-binary 'echo relay-after-large' "$RELAY_URL/run" > "$work/next"
     jq -e '.stdout == "relay-after-large\n" and .stderr == "" and .status == 0' "$work/next"
     printf 'relay large response %s bytes PASS\n' "$bytes"

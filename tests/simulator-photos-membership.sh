@@ -26,7 +26,7 @@ point_matches() {
     jq -e "$filter" <<< "$item" >/dev/null
 }
 select_photos() {
-    local x attempt
+    local x attempt point
     # The picker is a remote Photos extension. Its cells are visible to point
     # queries even when the app-wide accessibility tree cannot enumerate them.
     local photo='.type == "Image" and .AXUniqueId == "PXGGridLayout-Info" and (.AXLabel | startswith("Photo, "))'
@@ -35,7 +35,14 @@ select_photos() {
         if point_matches 201,390 "$photo" 2>/dev/null && point_matches 364,144 "$done" 2>/dev/null; then break; fi
         sleep 0.5
     done
-    if ((attempt == 30)); then printf 'Photos selection sheet did not open\n' >&2; return 1; fi
+    if ((attempt == 30)); then
+        printf 'Photos picker controls did not match the expected elements\n' >&2
+        for point in 201,390 364,144; do
+            printf 'Photos picker probe at %s:\n' "$point" >&2
+            axe describe-ui --udid "$sim" --point "$point" --minimal-keys >&2 || true
+        done
+        return 1
+    fi
     # Freshly imported C, B and A are the left, middle and right cells.
     # The unchanged membership verifier independently checks their byte hashes.
     for x in "$@"; do

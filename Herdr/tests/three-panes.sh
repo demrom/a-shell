@@ -64,6 +64,9 @@ wait_output() {
 		sleep 0.1
 	done
 	echo "missing or empty receipt: $1" >&2
+	# Record the active UI while the missing command is still on screen.
+	axe describe-ui --udid "$sim" --minimal-keys |
+		jq -c '[.. | objects | select(.AXLabel? != null) | {type, AXLabel, AXUniqueId}] | .[:20]' >&2 || true
 	return 1
 }
 
