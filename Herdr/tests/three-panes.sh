@@ -20,7 +20,7 @@ steps=$(mktemp)
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
 # shellcheck disable=SC2329
 finish() {
-	local status=$? name
+	local status=$? name pane
 	if [[ $status != 0 ]]; then
 		xcrun simctl spawn "$sim" log show --last 5m --style compact \
 			--predicate 'process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")' \
@@ -32,6 +32,14 @@ finish() {
 			else
 				printf 'receipt %s missing\n' "$name" >&2
 			fi
+		done
+		for pane in a b c; do
+			for name in ready result error finished; do
+				if [[ -f $receipts/$pane-cpu/$name ]]; then
+					printf 'CPU receipt %s/%s:\n' "$pane" "$name" >&2
+					tail -4 "$receipts/$pane-cpu/$name" >&2
+				fi
+			done
 		done
 	fi
 	rm -f "$steps"
