@@ -35,6 +35,15 @@ static inline pid_t ashellWaitWorker(pid_t pid, int *status, int options) {
 #endif
 }
 
+static inline pid_t ashellPeekWorker(pid_t pid) {
+#if defined(IOS_WORKER_PEEK_SUPPORTED)
+    return ios_peek_worker(pid);
+#else
+    errno = ENOTSUP;
+    return -1;
+#endif
+}
+
 static inline int ashellKillWorker(pid_t pid, int signal) {
 #if defined(IOS_WORKER_KILL_SUPPORTED)
     return ios_kill_worker(pid, signal);

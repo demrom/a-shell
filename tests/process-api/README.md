@@ -77,7 +77,7 @@ For readiness error isolation, build `signal-pending.c` with `-D_WASI_EMULATED_S
 Use stock SDK 34 and Binaryen 133. Build single-threaded wasm32 C modules with the fork overlay and export the compiler stack pointer before transforming all paths that can reach `process_fork`:
 
 ```sh
-for fixture in fork-exec fork-grown plain-fork; do
+for fixture in fork-exec fork-grown plain-fork fork-exec-rejected; do
     "$WASI_SDK_PATH/bin/clang" -O2 -std=c17 -Wall -Wextra -Werror \
         -I wasm-process/include "tests/process-api/$fixture.c" \
         wasm-process/process.c wasm-process/fork.c -Wl,--export=__stack_pointer -o "$fixture.raw.wasm"
@@ -87,7 +87,7 @@ for fixture in fork-exec fork-grown plain-fork; do
 done
 ```
 
-The first row checks child-only `close` and `dup2`, a native worker's output through a pipe and EOF, and wait status 7. Expect `process-fork-child` and `process-fork-parent` in that order. The second exercises the WasmKit copy path after guest memory has grown, the scoped parent/child identities, and isolation before `execvp`. Expect `process-fork-grown-ok`. The third attempts child output and exit without exec. It must print only `process-plain-fork-unsupported`. Run each module separately via `wasm` and `wasmkit`; all three need status 0 and empty stderr.
+The first row checks child-only `close` and `dup2`, a native worker's output through a pipe and EOF, and wait status 7. Expect `process-fork-child` and `process-fork-parent` in that order. The second exercises the WasmKit copy path after guest memory has grown, the scoped parent/child identities, and isolation before `execvp`. Expect `process-fork-grown-ok`. The third attempts child output and exit without exec. It must print only `process-plain-fork-unsupported`. The fourth calls `_exit(127)` after a rejected exec of a missing path. Expect `process-fork-exec-rejected`: the resumed parent sees `ENOENT`, not a child with status 127. Run each module separately via `wasm` and `wasmkit`; all four need status 0 and empty stderr.
 
 The parent is suspended during the child prelude. The prelude inherits private linear memory (up to 32 MiB) and borrows FD identities for local `close`/`dup2`; only final stdio is handed to a worker. No writes or unrelated process calls are allowed from the prelude. An admitted exec transfers the actual worker PID to the parent, and ordinary wait consumes that worker. Without exec the parent gets ENOTSUP; a rejected admission is not a manufactured child status. This is not arbitrary process cloning, native `fork`, or a shared-stack `vfork`. Only the SDK stack pointer and linear memory are copied; modules with other mutable WebAssembly globals, mutated indirect tables, shared memory or threads are outside this ABI. Prelude identity values are guest-local and cannot be signaled; process groups remain unsupported.
 

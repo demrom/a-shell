@@ -130,7 +130,7 @@ function prompt(string) {
 }
 
 // ashell_v1 process imports use the Preview 1 errno numbering.
-function processImports(wasi, memory, env, generation) {
+function processImports(wasi, memory, env, generation, prelude) {
 	const errno = { badFD: 8, tooBig: 1, fault: 21, encoding: 25, invalid: 28, io: 29, tooManyFDs: 33, notSupported: 58 };
 	const ioLimit = 4096;
 	const utf8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
@@ -139,7 +139,7 @@ function processImports(wasi, memory, env, generation) {
 	const maxVector = 4096;
 	const response = new SharedArrayBuffer(8196);
 	const responseLength = new Int32Array(response, 0, 1);
-	const streams = new Map([0, 1, 2].map(fd => [wasi.FD_MAP.get(fd), fd]));
+	const streams = prelude?.streams ?? new Map([0, 1, 2].map(fd => [wasi.FD_MAP.get(fd), fd]));
 
 	function exchange(message) {
 		const json = JSON.stringify({ ...message, generation });
@@ -334,6 +334,7 @@ function processImports(wasi, memory, env, generation) {
 
 	return {
 		process_pipe(pair) {
+			if (prelude) return -errno.notSupported;
 			try {
 				if (!pair) return -errno.fault;
 				const output = viewAt(pair, 8);
@@ -364,6 +365,12 @@ function processImports(wasi, memory, env, generation) {
 		process_dup2(source, target) {
 			if (source < 0 || target < 0 || !wasi.FD_MAP.has(source)) return -errno.badFD;
 			if (source === target) return 0;
+			if (prelude) {
+				// A private fd map borrows the parent's entries. No physical dup or
+				// close occurs until spawn resolves final stdio against those entries.
+				wasi.FD_MAP.set(target, wasi.FD_MAP.get(source));
+				return 0;
+			}
 			const entry = processEntry(source);
 			if (!entry) return -errno.notSupported;
 			const [status, handle] = request({ op: 'dup', fd: entry.processHandle });
@@ -381,7 +388,8 @@ function processImports(wasi, memory, env, generation) {
 		},
 		process_spawn(path, pathLength, argv, argc, envp, envc, actions, actionCount, flags, child) {
 			try {
-				if (flags & ~3 || argc === 0 || ((flags & 2) && envc !== 0)) return -errno.invalid;
+				if (Boolean(prelude) !== Boolean(flags & 4)) return -errno.notSupported;
+				if (flags & ~7 || argc === 0 || ((flags & 2) && envc !== 0)) return -errno.invalid;
 				const view = viewAt(child);
 				const [result, pid] = request({
 					op: 'spawn',
@@ -392,13 +400,23 @@ function processImports(wasi, memory, env, generation) {
 					searchPath: Boolean(flags & 1),
 					streams: childStreams(view, actions, actionCount),
 				});
-				if (result === 0) view.setInt32(child >>> 0, pid, true);
+				if (result === 0) {
+					if (prelude) {
+						prelude.admitted = pid;
+						throw prelude;
+					}
+					view.setInt32(child >>> 0, pid, true);
+				} else if (prelude) {
+					prelude.execError = result;
+				}
 				return result;
 			} catch (error) {
+				if (prelude && error === prelude) throw error;
 				return Number.isInteger(error) ? error : -errno.io;
 			}
 		},
 		process_kill(child, signal) {
+			if (prelude) return -errno.notSupported;
 			try {
 				const [result] = request({ op: 'kill', child, signal });
 				return result;
@@ -407,7 +425,9 @@ function processImports(wasi, memory, env, generation) {
 			}
 		},
 		process_wait(child, flags, status) {
+			if (prelude) return -errno.notSupported;
 			try {
+				if (flags === 2) return request({ op: 'peek', child })[0];
 				if (flags & ~1) return -errno.invalid;
 				const view = viewAt(status);
 				// Do not block the UI actor while the worker is running.
@@ -422,6 +442,109 @@ function processImports(wasi, memory, env, generation) {
 			}
 		},
 	};
+}
+
+// This is a private pre-exec continuation, not a second running process. Its
+// only external effect is admission of one executable on the existing broker.
+function runProcessModule(module, args, cwd, tty, env, generation) {
+	const unsupported = -58;
+	const maxForkMemory = 32 * 1024 * 1024;
+	const readOnly = new Set(['args_get', 'args_sizes_get', 'environ_get', 'environ_sizes_get',
+		'clock_time_get', 'clock_res_get', 'fd_fdstat_get', 'fd_filestat_get', 'proc_exit']);
+
+	function makeRun(prelude) {
+		const wasi = new WASI({
+			preopens: {'.': cwd, '/': '/'},
+			args,
+			env,
+			bindings: { ...browserBindings, fs: new WasmFs().fs },
+		});
+		if (tty !== 1) wasi.bindings.isTTY = () => false;
+		const streams = prelude?.streams ?? new Map([0, 1, 2].map(fd => [wasi.FD_MAP.get(fd), fd]));
+		if (prelude) wasi.FD_MAP = new Map(prelude.fds);
+		let instance, capture, result;
+		const processes = processImports(wasi, () => instance?.exports.memory, env, generation, prelude);
+		processes.process_fork = (data, length) => {
+			const exports = instance?.exports;
+			if (!exports) return unsupported;
+			data >>>= 0;
+			length >>>= 0;
+			if (result !== undefined) {
+				if (exports.asyncify_get_state() !== 2 || data !== capture.data || length !== capture.length) {
+					throw new Error('invalid fork rewind');
+				}
+				exports.asyncify_stop_rewind();
+				const value = result;
+				result = capture = undefined;
+				return value;
+			}
+			if (prelude || capture || !(exports.__stack_pointer instanceof WebAssembly.Global) ||
+				!['start_unwind', 'stop_unwind', 'start_rewind', 'stop_rewind', 'get_state']
+					.every(name => typeof exports['asyncify_' + name] === 'function')) return unsupported;
+			const buffer = exports.memory?.buffer;
+			if (!(buffer instanceof ArrayBuffer)) return unsupported; // No shared memory.
+			if (buffer.byteLength > maxForkMemory) return -48;
+			if (!data || data % 4 || length < 8 || data + length > buffer.byteLength || exports.asyncify_get_state() !== 0) return -28;
+			const view = new DataView(buffer);
+			view.setUint32(data, data + 8, true);
+			view.setUint32(data + 4, data + length, true);
+			capture = {data, length, stack: exports.__stack_pointer.value};
+			exports.asyncify_start_unwind(data);
+			return 0; // Not observed by instrumented code while unwinding.
+		};
+		const imports = wasi.getImports(module);
+		if (prelude) {
+			// Child close and dup2 only change borrowed entries in the local map.
+			// Never let a prelude call path_open, fd_write or other external I/O.
+			const preview = imports.wasi_snapshot_preview1;
+			for (const name of Object.keys(preview)) {
+				if (!readOnly.has(name)) preview[name] = () => -unsupported;
+			}
+			preview.fd_close = fd => wasi.FD_MAP.delete(fd >>> 0) ? 0 : 8;
+		}
+		instance = new WebAssembly.Instance(module, { ...imports, ashell_v1: processes });
+		return {
+			get capture() { return capture; },
+			exports: instance.exports,
+			start: () => wasi.start(instance),
+			rewind(saved, value) {
+				capture = saved;
+				result = value;
+				instance.exports.__stack_pointer.value = saved.stack;
+				instance.exports.asyncify_start_rewind(saved.data);
+				wasi.start(instance);
+			},
+			cloneBranch(saved) {
+				const exports = instance.exports;
+				if (exports.asyncify_get_state() !== 1) throw new Error('invalid fork unwind');
+				exports.asyncify_stop_unwind();
+				const view = new DataView(exports.memory.buffer);
+				const cursor = view.getUint32(saved.data, true);
+				if (cursor < saved.data + 8 || cursor > saved.data + saved.length ||
+					view.getUint32(saved.data + 4, true) !== saved.data + saved.length) return -28;
+				if (view.byteLength > maxForkMemory) return -48;
+				const childPrelude = {fds: wasi.FD_MAP, streams, admitted: 0, execError: unsupported};
+				try {
+					const child = makeRun(childPrelude);
+					const pages = (exports.memory.buffer.byteLength - child.exports.memory.buffer.byteLength) / 65536;
+					if (pages > 0) child.exports.memory.grow(pages);
+					new Uint8Array(child.exports.memory.buffer).set(new Uint8Array(exports.memory.buffer));
+					child.rewind(saved, 0);
+				} catch (error) {
+					if (error === childPrelude) return childPrelude.admitted || -29;
+					if (!(error instanceof WASIExitError)) return unsupported;
+				}
+				return childPrelude.execError;
+			},
+		};
+	}
+
+	const parent = makeRun();
+	parent.start();
+	while (parent.capture) {
+		const saved = parent.capture;
+		parent.rewind(saved, parent.cloneBranch(saved));
+	}
 }
 
 // bufferString: program in base64 format
@@ -443,28 +566,8 @@ function executeWebAssemblyWorker(bufferString, args, cwd, tty, env, generation)
 	var errorCode = 0; 
 	// TODO: link with other libraries/frameworks? impossible, I guess.
 	try {
-		const wasmFs = new WasmFs(); // local file system. Used less often.
-		let wasi = new WASI({
-			preopens: {'.': cwd, '/': '/'},
-			args: args,
-			env: env,
-			bindings: {
-				...browserBindings,
-				fs: wasmFs.fs,
-			}
-		})
-		wasi.args = args
-		if (tty != 1) {
-			wasi.bindings.isTTY = (fd) => false;
-		}
 		const module = new WebAssembly.Module(loweredWasmBytes);
-		let instance;
-		const processes = processImports(wasi, () => instance?.exports.memory, env, generation);
-		instance = new WebAssembly.Instance(module, {
-			...wasi.getImports(module),
-			ashell_v1: processes,
-		});
-		wasi.start(instance);
+		runProcessModule(module, args, cwd, tty, env, generation);
 	}
 	catch (error) {
 		// WASI returns an error even in some cases where things went well. 

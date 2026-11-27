@@ -6731,7 +6731,8 @@ extension SceneDelegate: WKUIDelegate {
         default:
             break
         }
-        if request.op == "wait" {
+        let peek = request.op == "peek"
+        if peek || request.op == "wait" {
             guard let child = request.child, child == -1 || webAssemblyChildren.contains(child) else {
                 return reply(webAssemblyProcessError(ECHILD))
             }
@@ -6739,7 +6740,7 @@ extension SceneDelegate: WKUIDelegate {
             guard !candidates.isEmpty else { return reply(webAssemblyProcessError(ECHILD)) }
             for candidate in candidates {
                 var status: Int32 = 0
-                let result = ashellWaitWorker(candidate, &status, WNOHANG)
+                let result = peek ? ashellPeekWorker(candidate) : ashellWaitWorker(candidate, &status, WNOHANG)
                 if result < 0 {
                     let error = errno
                     if error == ECHILD || error == ESRCH {
@@ -6749,7 +6750,7 @@ extension SceneDelegate: WKUIDelegate {
                     return reply(webAssemblyProcessError(error))
                 }
                 if result > 0 {
-                    webAssemblyChildren.remove(candidate)
+                    if !peek { webAssemblyChildren.remove(candidate) }
                     return reply("\(result) \(status)")
                 }
             }

@@ -6,7 +6,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 const [resources, fixture, mode = 'pipe', scripts = path.resolve(__dirname, '../..')] = process.argv.slice(2);
-assert.ok(resources && fixture && ['pipe', 'popen', 'table', 'errors'].includes(mode), 'Usage: node webview-fd.cjs RESOURCES GUEST_WASM [pipe|popen|table|errors [SCRIPTS_DIR]]');
+assert.ok(resources && fixture && ['pipe', 'popen', 'table', 'errors', 'fork-exec-rejected'].includes(mode), 'Usage: node webview-fd.cjs RESOURCES GUEST_WASM [pipe|popen|table|errors|fork-exec-rejected [SCRIPTS_DIR]]');
 const requireBundle = createRequire(path.resolve(resources, 'wasm_worker_wasm.js'));
 const load = (context, name) => vm.runInContext(fs.readFileSync(path.join(scripts, name), 'utf8'), context);
 const calls = [];
@@ -75,6 +75,10 @@ const page = vm.createContext({
             bytes = Buffer.from(request.data, 'base64');
             return `0 ${bytes.length}`;
         case 'spawn':
+            if (mode === 'fork-exec-rejected') {
+                assert.equal(request.path, '/ashell-process-fixture-missing/executable');
+                return '-44 0'; // ENOENT; no child was admitted.
+            }
             assert.equal(mode, 'popen');
             assert.deepEqual(request.streams, [0, 101, 2]);
             assert.equal(request.path, 'dash');
@@ -108,7 +112,7 @@ load(page, 'wasm_withWorker.js');
 page.ashellProcessGeneration = '19';
 page.executeWebAssembly(fs.readFileSync(fixture).toString('base64'), ['pipe'], '/tmp', 0, { PATH: '/bin' });
 const guest = vm.createContext({
-    WebAssembly, TextDecoder, TextEncoder, btoa,
+    ArrayBuffer, WebAssembly, TextDecoder, TextEncoder, btoa,
     importScripts() {},
     Tarp: { require() {} },
     require: requireBundle,
@@ -129,6 +133,7 @@ const expected = {
     popen: ['process-popen-ok\n', ['pipe', 'spawn', 'close', 'read', 'read', 'close', 'wait']],
     table: ['process-fd-table-ok\n', ['pipe', 'dup', 'close', 'close', 'close']],
     errors: ['process-fd-errors-ok\n', ['pipe', 'close', 'pipe', 'close', 'dup', 'close', 'close']],
+    'fork-exec-rejected': ['process-fork-exec-rejected\n', ['spawn']],
 };
 assert.equal(Buffer.from(stdout).toString(), expected[mode][0]);
 assert.deepEqual(calls, expected[mode][1]);
