@@ -1,19 +1,25 @@
 #!/bin/bash
 set -euo pipefail
-if [[ $# != 3 ]]; then
-  echo 'usage: link-framework.sh STATICLIB OUTPUT-DIRECTORY IOS-SYSTEM-FRAMEWORK' >&2
+if [[ $# != 3 && $# != 4 ]]; then
+  echo 'usage: link-framework.sh STATICLIB OUTPUT-DIRECTORY IOS-SYSTEM-FRAMEWORK [device|simulator|simulator-x86_64]' >&2
   exit 2
 fi
 archive=$1
 output=$2
 core=$3
+case ${4:-device} in
+  device) sdk_name=iphoneos target=arm64-apple-ios26.2 platform=iPhoneOS ;;
+  simulator) sdk_name=iphonesimulator target=arm64-apple-ios26.2-simulator platform=iPhoneSimulator ;;
+  simulator-x86_64) sdk_name=iphonesimulator target=x86_64-apple-ios26.2-simulator platform=iPhoneSimulator ;;
+  *) echo "Unknown platform: $4" >&2; exit 2 ;;
+esac
 source_dir=$(cd "$(dirname "$0")" && pwd)
 [[ -f "$archive" && -f "$core/ios_system" ]]
-sdk=$(xcrun --sdk iphoneos --show-sdk-path)
+sdk=$(xcrun --sdk "$sdk_name" --show-sdk-path)
 bundle="$output/WasmtimeCommand.framework"
 mkdir -p "$bundle"
 # Link the same C entry and contract into each matched runtime variant.
-nice -n 15 xcrun --sdk iphoneos clang -target arm64-apple-ios26.2 -isysroot "$sdk" \
+nice -n 15 xcrun --sdk "$sdk_name" clang -target "$target" -isysroot "$sdk" \
   -O2 -Wall -Wextra -Werror -fPIC -dynamiclib -DASHELL_P3_EMBEDDED_CONTRACT \
   "$source_dir/entry.c" "$source_dir/worker.c" "$source_dir/ffi-contract.c" "$archive" \
   -F "$(dirname "$core")" -framework ios_system -framework Security \
@@ -25,7 +31,7 @@ nice -n 15 xcrun --sdk iphoneos clang -target arm64-apple-ios26.2 -isysroot "$sd
   -o "$bundle/WasmtimeCommand.new"
 xcrun strip -S -x "$bundle/WasmtimeCommand.new"
 mv "$bundle/WasmtimeCommand.new" "$bundle/WasmtimeCommand"
-cat > "$bundle/Info.plist" <<'PLIST'
+cat > "$bundle/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -35,7 +41,7 @@ cat > "$bundle/Info.plist" <<'PLIST'
 <key>CFBundlePackageType</key><string>FMWK</string>
 <key>CFBundleVersion</key><string>1</string>
 <key>CFBundleShortVersionString</key><string>0.1</string>
-<key>CFBundleSupportedPlatforms</key><array><string>iPhoneOS</string></array>
+<key>CFBundleSupportedPlatforms</key><array><string>$platform</string></array>
 <key>MinimumOSVersion</key><string>26.2</string>
 </dict></plist>
 PLIST
