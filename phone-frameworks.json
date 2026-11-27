@@ -259,11 +259,11 @@
   },
   {
     "name": "WasmtimeCommand",
-    "path": "/Users/demrom/o/build/phone-inputs/wasmtime-02a68ff5/WasmtimeCommand.framework",
-    "sha256": "a1db904cab85fb4fa336dce22be2a9125b6e1fa0cad8cdec1eedaf0aecb23c13",
+    "path": "/Users/demrom/o/build/phone-inputs/wasmtime-653cfd39/WasmtimeCommand.framework",
+    "sha256": "ff12018ba05ac2e97d89c69cb18895b88e94a339bd2ae762ae4a6e3f77873ec8",
     "commands": [
       "wasmtime"
     ],
-    "source": "demrom/a-shell ci/wasmtime-framework 02a68ff5b3023b80fdbdea1e965eb7d0c685f8b6 (wasmtime-tty-512 plus tests/wasmtime-proof/ci-framework.sh), hosted run 45955380258 artifact wasmtime-command, xcframework zip sha256 in WasmtimeCommand.checksums.txt; Wasmtime 49.0.3 C1 Pulley, Rust 1.96.1, ios_system df998e76 link stub; 16 ios_system imports all exported by ios_system-5e23b1d"
+    "source": "demrom/a-shell ci/wasmtime-framework 653cfd393c8a1fa2808634b4b10227b3ec638fae (wasmtime-tty-512 plus tests/wasmtime-proof/ci-framework.sh and the Preview 2 TCP/UDP/name-lookup grant), hosted run 45987825924 artifact wasmtime-command, xcframework zip sha256 in WasmtimeCommand.checksums.txt; Wasmtime 49.0.3 C1 Pulley, Rust 1.96.1, ios_system df998e76 link stub; 16 ios_system imports all exported by ios_system-5e23b1d"
   }
 ]
