@@ -9,17 +9,24 @@ permissions:
 
 jobs:
   build:
-    name: a-Shell-noPython (${{ matrix.platform }})
+    name: ${{ matrix.scheme }} (${{ matrix.platform }})
     runs-on: macos-15
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: iOS
+          - scheme: a-Shell-noPython
+            platform: iOS
             arch: arm64
-          - platform: iOS Simulator
+          - scheme: a-Shell-noPython
+            platform: iOS Simulator
             arch: x86_64
+          # Apple-silicon Simulator app for manual checks, uploaded below.
+          - scheme: a-Shell-mini
+            platform: iOS Simulator
+            arch: arm64
+            upload: true
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.3.app/Contents/Developer
     defaults:
@@ -40,12 +47,35 @@ jobs:
         run: nice -n 15 ./downloadFrameworks.sh --jobs 4
       - name: Build unsigned app
         env:
+          SCHEME: ${{ matrix.scheme }}
           PLATFORM: ${{ matrix.platform }}
           ARCH: ${{ matrix.arch }}
         run: |
           nice -n 15 xcodebuild -project a-Shell.xcodeproj \
-            -scheme a-Shell-noPython -configuration Debug \
+            -scheme "$SCHEME" -configuration Debug \
             -destination "generic/platform=$PLATFORM" \
             -derivedDataPath "$RUNNER_TEMP/DerivedData" -jobs 4 \
             ARCHS="$ARCH" \
             CODE_SIGNING_ALLOWED=NO build
+      - name: Sign and zip Simulator app
+        if: matrix.upload
+        env:
+          SCHEME: ${{ matrix.scheme }}
+        run: |
+          app="$RUNNER_TEMP/DerivedData/Build/Products/Debug-iphonesimulator/$SCHEME.app"
+          # Startup needs the shared container even on Simulator.
+          group=$(plutil -extract AppGroupIdentifier raw -o - "$app/Info.plist")
+          entitlements="$RUNNER_TEMP/simulator-app-entitlements.plist"
+          /usr/libexec/PlistBuddy -c 'Add :com.apple.security.application-groups array' \
+            -c "Add :com.apple.security.application-groups:0 string $group" "$entitlements"
+          codesign --force --sign - --entitlements "$entitlements" "$app"
+          codesign --verify --deep "$app"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$RUNNER_TEMP/$SCHEME-simulator.zip"
+      - name: Upload Simulator app
+        if: matrix.upload
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          path: ${{ runner.temp }}/${{ matrix.scheme }}-simulator.zip
+          archive: false
+          retention-days: 3
+          if-no-files-found: error
