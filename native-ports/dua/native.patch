@@ -1,0 +1,439 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -29,6 +29,7 @@
+ 
+ [package]
+ name = "dua-cli"
++autobins = false
+ version = "3.0.3"
+ authors.workspace = true
+ edition.workspace = true
+@@ -119,12 +120,9 @@
+ [target.'cfg(unix)'.dependencies]
+ signal-hook = { version = "0.3.18", optional = true }
+ 
+-[[bin]]
+-name = "dua"
+-path = "src/main.rs"
+-
+ [lib]
+ name = "dua"
++crate-type = ["cdylib"]
+ 
+ [profile.release]
+ panic = 'abort'
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -7,6 +7,14 @@
+ #![deny(unsafe_code)]
+ #![deny(missing_docs)]
+ 
++extern crate self as dua;
++
++#[allow(unsafe_code, missing_docs)]
++#[path = "main.rs"]
++mod command;
++#[allow(unsafe_code, dead_code)]
++mod host_io;
++
+ pub(crate) use dua_core as walk;
+ pub use dua_core::Options as TraversalOptions;
+ 
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,13 +1,15 @@
+-#![forbid(rust_2018_idioms, unsafe_code)]
++#![forbid(rust_2018_idioms)]
++
++use crate::host_io::Output;
+ use anyhow::{Context, Result, anyhow, bail};
+ use clap::{CommandFactory as _, FromArgMatches as _};
+ use dua::canonicalize_ignore_dirs;
+-use log::info;
++use std::ffi::{CStr, OsString, c_char};
++use std::os::unix::ffi::OsStringExt;
+ use std::{
+     fs, io,
+-    io::{IsTerminal, Write},
++    io::Write,
+     path::{Path, PathBuf},
+-    process,
+ };
+ 
+ #[cfg(feature = "tui-crossplatform")]
+@@ -26,13 +28,9 @@
+ mod interactive;
+ mod options;
+ 
+-fn stderr_if_tty() -> Option<io::Stderr> {
+-    let stderr = io::stderr();
+-    if stderr.is_terminal() {
+-        Some(stderr)
+-    } else {
+-        None
+-    }
++fn stderr_if_tty() -> Option<Output> {
++    // No kernel tty: leave progress animation disabled.
++    None
+ }
+ 
+ fn open_snapshot_file(path: &Path) -> Result<fs::File> {
+@@ -92,42 +90,61 @@
+     }
+ }
+ 
+-fn main() -> Result<()> {
++// ios_system owns argv and thread-local streams until this call returns.
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn dua_ios_main(argc: i32, argv: *const *const c_char) -> i32 {
++    let status = std::panic::catch_unwind(|| {
++        let args = (0..argc).map(|i| unsafe {
++            OsString::from_vec(CStr::from_ptr(*argv.add(i as usize)).to_bytes().to_vec())
++        });
++        let matches = match options::Args::command().try_get_matches_from(args) {
++            Ok(matches) => matches,
++            Err(error) => {
++                let mut stream = if error.use_stderr() {
++                    Output::Stderr
++                } else {
++                    Output::Stdout
++                };
++                return if write!(stream, "{error}").is_err() {
++                    1
++                } else {
++                    error.exit_code()
++                };
++            }
++        };
++        match run(matches) {
++            Ok(status) => status,
++            Err(error) => {
++                let _ = writeln!(Output::Stderr, "dua: {error:#}");
++                1
++            }
++        }
++    })
++    .unwrap_or_else(|_| {
++        let _ = writeln!(Output::Stderr, "dua: unexpected failure");
++        1
++    });
++    let output = Output::Stdout.flush();
++    let errors = Output::Stderr.flush();
++    if output.is_err() || errors.is_err() {
++        1
++    } else {
++        status
++    }
++}
++
++fn run(matches: clap::ArgMatches) -> Result<i32> {
+     use options::Command::{Aggregate, Completions, Config, Diff, Flamegraph, Stacks};
+     #[cfg(feature = "tui-crossplatform")]
+     use options::Command::{Clean, Interactive};
+ 
+-    let matches = options::Args::command().get_matches_from(wild::args_os());
+     let global_traversal_options_used = traversal_options_on_command_line(&matches);
+     let global_format_used =
+         matches.value_source("format") == Some(clap::parser::ValueSource::CommandLine);
+     let opt = options::Args::from_arg_matches(&matches)?;
+ 
+-    if let Some(log_file) = &opt.log_file {
+-        log_panics::init();
+-
+-        let log_output = std::fs::OpenOptions::new()
+-            .create(true)
+-            .append(true)
+-            .open(log_file)?;
+-
+-        fern::Dispatch::new()
+-            .level(log::LevelFilter::Debug)
+-            .format(|formatter_out, log_msg, log_rec| {
+-                let when = jiff::Zoned::now();
+-                formatter_out.finish(format_args!(
+-                    "[{} {} {}:{}] {}",
+-                    when.strftime("%Y-%m-%d %H:%M:%S%.3f %:z"),
+-                    log_rec.level(),
+-                    log_rec.file().unwrap_or("<unknown>"),
+-                    log_rec.line().unwrap_or(0),
+-                    log_msg
+-                ));
+-            })
+-            .chain(log_output)
+-            .apply()?;
+-
+-        info!("dua options={opt:#?}");
++    if opt.log_file.is_some() {
++        bail!("--log-file is unavailable in embedded dua");
+     }
+ 
+     let options::Args {
+@@ -338,10 +355,10 @@
+             let mut display = global_traversal.clone();
+             display.format = format.or(display.format);
+             let byte_format = display.byte_format(&dua::Config::load()?);
+-            let stdout = io::stdout();
+-            let out_is_terminal = stdout.is_terminal();
++            let stdout = Output::Stdout;
++            let out_is_terminal = false;
+             dua::diff_snapshots(
+-                (stdout.lock(), out_is_terminal),
++                (stdout, out_is_terminal),
+                 &mut old,
+                 &mut new,
+                 byte_format,
+@@ -356,12 +373,12 @@
+             if global_format_used {
+                 bail!("stacks cannot be used with --format");
+             }
+-            let stdout = io::stdout();
++            let stdout = Output::Stdout;
+             run_stacks(
+                 &global_traversal.scan,
+                 global_traversal_options_used,
+                 args,
+-                stdout.lock(),
++                stdout,
+             )?
+         }
+         Some(Flamegraph {
+@@ -397,11 +414,10 @@
+             };
+             "bytes".clone_into(&mut options.count_name);
+             "Path:".clone_into(&mut options.name_type);
+-            let path = write_flamegraph(stacks, output, &mut options)?;
+             if open {
+-                open::that(&path)
+-                    .with_context(|| format!("Could not open flame graph {}", path.display()))?;
++                bail!("--open is unavailable in embedded dua");
+             }
++            write_flamegraph(stacks, output, &mut options)?;
+             result
+         }
+         Some(Aggregate {
+@@ -414,7 +430,7 @@
+             depth,
+         }) => {
+             if stack {
+-                let stdout = io::stdout();
++                let stdout = Output::Stdout;
+                 run_stacks(
+                     &global_traversal.scan,
+                     global_traversal_options_used,
+@@ -423,7 +439,7 @@
+                         import,
+                         depth,
+                     },
+-                    stdout.lock(),
++                    stdout,
+                 )?
+             } else {
+                 if import.is_some() && global_traversal_options_used {
+@@ -433,17 +449,17 @@
+                 if let Some(path) = import {
+                     let mut replay = replay_snapshot_file(&path)?;
+                     writeln!(
+-                        io::stderr(),
++                        Output::Stderr,
+                         "Results are from a traversal snapshot; no filesystem traversal was performed"
+                     )
+                     .ok();
+-                    let stdout = io::stdout();
++                    let stdout = Output::Stdout;
+                     let config = dua::Config::load()?;
+                     let byte_format = traversal.byte_format(&config);
+-                    let out_supports_colors = stdout.is_terminal();
++                    let out_supports_colors = false;
+                     if let Some(depth) = depth {
+                         dua::aggregate_tree_from_replay(
+-                            (stdout.lock(), out_supports_colors),
++                            (stdout, out_supports_colors),
+                             &mut replay,
+                             byte_format,
+                             depth.saturating_sub(1),
+@@ -452,7 +468,7 @@
+                         )?
+                     } else {
+                         dua::aggregate_replay(
+-                            (stdout.lock(), out_supports_colors),
++                            (stdout, out_supports_colors),
+                             &mut replay,
+                             !no_total,
+                             !no_sort,
+@@ -466,10 +482,10 @@
+                         let byte_format = traversal.byte_format(&config);
+                         let (paths, _expanded_root) =
+                             extract_paths_maybe_set_cwd(traversal.scan.input, &mut walk_options)?;
+-                        let stdout = io::stdout();
+-                        let out_supports_colors = stdout.is_terminal();
++                        let stdout = Output::Stdout;
++                        let out_supports_colors = false;
+                         dua::aggregate_tree(
+-                            (stdout.lock(), out_supports_colors),
++                            (stdout, out_supports_colors),
+                             stderr_if_tty(),
+                             walk_options,
+                             byte_format,
+@@ -500,17 +516,14 @@
+         Some(Completions { shell }) => {
+             let mut cmd = options::Args::command();
+             let dua = cmd.get_name().to_string();
+-            clap_complete::generate(shell, &mut cmd, dua, &mut io::stdout());
+-            return Ok(());
++            clap_complete::generate(shell, &mut cmd, dua, &mut Output::Stdout);
++            return Ok(0);
+         }
+         Some(Config { command }) => match command {
+-            options::ConfigCommand::Edit => {
+-                edit_config()?;
+-                return Ok(());
+-            }
++            options::ConfigCommand::Edit => bail!("config edit is unavailable in embedded dua"),
+             options::ConfigCommand::ShowDefault { reset_with_default } => {
+                 show_default_config(reset_with_default)?;
+-                return Ok(());
++                return Ok(0);
+             }
+         },
+         None => {
+@@ -525,7 +538,7 @@
+         }
+     };
+ 
+-    process::exit(res.to_exit_code());
++    Ok(res.to_exit_code())
+ }
+ 
+ fn run_stacks(
+@@ -546,7 +559,7 @@
+         }
+         let mut replay = replay_snapshot_file(&path)?;
+         writeln!(
+-            io::stderr(),
++            Output::Stderr,
+             "Results are from a traversal snapshot; no filesystem traversal was performed"
+         )
+         .ok();
+@@ -606,12 +619,11 @@
+     byte_format: dua::ByteFormat,
+     show_statistics: bool,
+ ) -> Result<dua::WalkResult> {
+-    let stdout = io::stdout();
+-    let out_supports_colors = stdout.is_terminal();
+-    let stdout_locked = stdout.lock();
++    let stdout = Output::Stdout;
++    let out_supports_colors = false;
+     let (result, statistics) = match inputs {
+         AggregateInputs::Paths(paths) => dua::aggregate(
+-            (stdout_locked, out_supports_colors),
++            (stdout, out_supports_colors),
+             stderr_if_tty(),
+             walk_options,
+             compute_total,
+@@ -621,7 +633,7 @@
+         ),
+         #[cfg(any(windows, target_os = "macos"))]
+         AggregateInputs::Entries(entries) => dua::aggregate_entries(
+-            (stdout_locked, out_supports_colors),
++            (stdout, out_supports_colors),
+             stderr_if_tty(),
+             walk_options,
+             compute_total,
+@@ -631,7 +643,7 @@
+         ),
+     }?;
+     if show_statistics {
+-        writeln!(io::stderr(), "{statistics:?}").ok();
++        writeln!(Output::Stderr, "{statistics:?}").ok();
+     }
+ 
+     Ok(result)
+@@ -750,6 +762,7 @@
+ /// directory that is still traversable. In that case, leave the working directory
+ /// unchanged and return the absolute path for callers to expand into inputs instead.
+ /// All other errors are propagated.
++#[cfg(any(windows, target_os = "macos"))]
+ fn set_current_dir(path: &Path) -> io::Result<Option<PathBuf>> {
+     #[cfg(windows)]
+     const ERROR_FILENAME_EXCED_RANGE: i32 = 206;
+@@ -840,11 +853,9 @@
+     // documented behavior, these are never subject to `-i`/`--ignore-dirs` filtering, only
+     // paths that we ourselves expand into roots below are.
+     let paths_were_expanded = paths.is_empty() || (paths.len() == 1 && paths[0].is_dir());
+-    // Changing into a sole directory input keeps the reported paths short.
++    // Use an explicit expansion root instead of changing the host's cwd.
+     let expanded_root = if paths.len() == 1 && paths[0].is_dir() {
+-        let root = set_current_dir(&paths[0])?;
+-        paths.clear();
+-        root
++        Some(std::path::absolute(paths.remove(0))?)
+     } else {
+         None
+     };
+@@ -945,62 +956,17 @@
+     Ok(entries)
+ }
+ 
+-fn edit_config() -> Result<()> {
+-    let path = dua::Config::path()?;
+-
+-    ensure_default_config_file(&path)?;
+-
+-    let editor = std::env::var("EDITOR").map_err(|_| {
+-        anyhow!(
+-            "$EDITOR is not set or is illformed UTF8. Created default configuration at {}",
+-            path.display()
+-        )
+-    })?;
+-
+-    let Some(mut editor_parts) = shlex::split(&editor) else {
+-        return Err(anyhow!(
+-            "$EDITOR has invalid shell quoting. Created default configuration at {}",
+-            path.display()
+-        ));
+-    };
+-
+-    if editor_parts.is_empty() {
+-        bail!(
+-            "$EDITOR is empty. Created default configuration at {}",
+-            path.display()
+-        )
+-    }
+-
+-    let editor_program = editor_parts.remove(0);
+-    let status = std::process::Command::new(&editor_program)
+-        .args(editor_parts)
+-        .arg(&path)
+-        .status()
+-        .with_context(|| {
+-            format!(
+-                "Failed to launch editor {editor_program:?} (from $EDITOR={editor:?}) for {}",
+-                path.display()
+-            )
+-        })?;
+-
+-    if status.success() {
+-        println!("Successfully edited '{}'", path.display());
+-        return Ok(());
+-    }
+-
+-    Err(anyhow!(
+-        "Editor {editor_program:?} (from $EDITOR={editor:?}) exited with status {status} while editing {}",
+-        path.display()
+-    ))
+-}
+-
+ fn show_default_config(overwrite_with_default: bool) -> Result<()> {
+     print!("{}", dua::Config::default_file_content());
+ 
+     if overwrite_with_default {
+         let path = dua::Config::path()?;
+         write_default_config_file(&path)?;
+-        eprintln!("Reset configuration at '{}'", path.display());
++        writeln!(
++            Output::Stderr,
++            "Reset configuration at '{}'",
++            path.display()
++        )?;
+     }
+ 
+     Ok(())
