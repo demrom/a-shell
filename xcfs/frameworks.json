@@ -298,10 +298,10 @@
       }
     },
     "ios_system-process-api": {
-      "url": "https://nightly.link/demrom/ios_system/actions/artifacts/15231931433.zip",
-      "sha256": "c2c3f1a0bb3f2f256448cadd0a93d4d3f49e240ea218ba929908fa58d29b1bff",
-      "run": "https://github.com/demrom/ios_system/actions/runs/46063931111/attempts/1",
-      "revision": "d10881128df62db864dfce85dc0e522107ecd81f",
+      "url": "https://nightly.link/demrom/ios_system/actions/artifacts/15236108501.zip",
+      "sha256": "f0ade018efb7d0d69469d3b21aed355e236d6e55e88a3f0d87a5ae56ed3fdb13",
+      "run": "https://github.com/demrom/ios_system/actions/runs/46075762874/attempts/1",
+      "revision": "793f171414dfc3bc3f4918a9a9cc4815beb6a6e7",
       "frameworks": {
         "ios_system": ".build/ios_system.xcframework.zip"
       }
@@ -874,10 +874,10 @@
       }
     },
     "a-shell-WasmKitCommand": {
-      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15232367740.zip",
-      "sha256": "b5e9655530dd0c7f84ed5dd1268287d3604dc3da50bc398d6279c7ad206129cd",
-      "run": "https://github.com/demrom/a-shell/actions/runs/46068865788/attempts/1",
-      "revision": "c87ac29088959b2400e26ace4953961d283b0cf7",
+      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15238920467.zip",
+      "sha256": "13fad9a41e0104debb70c71cb211435a65346c201c94e707b29f0eb0dca39946",
+      "run": "https://github.com/demrom/a-shell/actions/runs/46081692878/attempts/1",
+      "revision": "3f2c79a24cc367f8f46d12810bbac8a0e98954d5",
       "frameworks": {
         "WasmKitCommand": "WasmKitCommand.xcframework.zip"
       }
