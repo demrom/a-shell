@@ -91,6 +91,14 @@ The first row checks child-only `close` and `dup2`, a native worker's output thr
 
 The parent is suspended during the child prelude. The prelude inherits private linear memory (up to 32 MiB) and borrows FD identities for local `close`/`dup2`; only final stdio is handed to a worker. No writes or unrelated process calls are allowed from the prelude. An admitted exec transfers the actual worker PID to the parent, and ordinary wait consumes that worker. Without exec the parent gets ENOTSUP; a rejected admission is not a manufactured child status. This is not arbitrary process cloning, native `fork`, or a shared-stack `vfork`. Only the SDK stack pointer and linear memory are copied; modules with other mutable WebAssembly globals, mutated indirect tables, shared memory or threads are outside this ABI. Prelude identity values are guest-local and cannot be signaled; process groups remain unsupported.
 
+To check `sigset_t` through the public `<pthread.h>` and `<signal.h>` headers even when a replacement `<stdint.h>` re-enters the SDK typedef header:
+
+```sh
+"$WASI_SDK_PATH/bin/clang" -std=c17 -Wall -Wextra -Werror -D_WASI_EMULATED_SIGNAL \
+    -I tests/process-api/recursive-headers -I wasm-process/include \
+    -fsyntax-only tests/process-api/sigset-include.c
+```
+
 ## Interrupt a guest with a live worker
 
 Build `cancel-spawn.wasm` with `wasm-tools parse tests/process-api/cancel-spawn.wat -o cancel-spawn.wasm`. Copy it to a fresh Documents subdirectory, `cd` there in the mini terminal, and run `wasmkit ./cancel-spawn.wasm`. Without interruption, confirm the worker writes `ready` to `process-cancel-started` and then `leaked` to `process-cancel-leaked` after 10 seconds. This is the delivery control, not a failure.
