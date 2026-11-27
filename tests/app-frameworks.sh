@@ -104,6 +104,35 @@ prepare() {
     a-Shell-mini simulator --root "$fixture" --manifest "$fixture/manifest.json"
 }
 
+# The first install must be recoverable even if a later input aborts prepare.
+mkdir -p "$fixture/Malformed/Second.xcframework"
+printf '<plist version="1.0"><integer>not-an-integer</integer></plist>\n' > "$fixture/Malformed/Second.xcframework/Info.plist"
+ditto -c -k --keepParent "$fixture/Malformed/Second.xcframework" "$fixture/malformed.zip"
+malformed=$(shasum -a 256 "$fixture/malformed.zip" | cut -d ' ' -f 1)
+cp "$fixture/malformed.zip" "$cache/$malformed.zip"
+cp "$fixture/manifest.json" "$fixture/good-manifest.json"
+jq --arg sha "$malformed" '.releases.Second = {sha256: $sha, url: "https://example.invalid/malformed.zip"}' \
+  "$fixture/good-manifest.json" > "$fixture/manifest.json"
+status=0
+prepare > "$fixture/interrupted.log" 2>&1 || status=$?
+[[ $status == 1 ]]
+grep -Fq 'not-an-integer' "$fixture/interrupted.log"
+cmp "$fixture/Staged/First.xcframework/ios-sim/libFixture.a" "$fixture/Vendor/First.xcframework/ios-sim/libFixture.a"
+test ! -e "$fixture/Vendor/Second.xcframework"
+mv "$fixture/good-manifest.json" "$fixture/manifest.json"
+
+# Retry may replace the first input, but must leave an unmanaged path alone.
+unmanaged="$fixture/Vendor/Second.xcframework"
+mkdir "$unmanaged"
+printf 'unmanaged\n' > "$unmanaged/receipt.txt"
+status=0
+prepare > "$fixture/unmanaged.log" 2>&1 || status=$?
+[[ $status == 1 ]]
+grep -Fq 'Vendor/Second.xcframework; use a clean worktree' "$fixture/unmanaged.log"
+grep -Fxq 'unmanaged' "$unmanaged/receipt.txt"
+rm "$unmanaged/receipt.txt"
+rmdir "$unmanaged"
+
 prepare
 file "$fixture/Vendor/First.xcframework/ios-sim/libFixture.a" > "$fixture/file.txt"
 grep -Fq '[arm64:' "$fixture/file.txt"
@@ -118,3 +147,105 @@ prepare || status=$?
 [[ $status == 1 ]]
 grep -Fq -- '- `Vendor/First.xcframework`: cached SHA-256 mismatch' "$fixture/summary"
 grep -Fq -- '- `Vendor/Second.xcframework`: cached SHA-256 mismatch' "$fixture/summary"
+
+# Package the same interpreter and extension under two load identities.
+cat > "$fixture/a-Shell.xcodeproj/project.pbxproj" <<'PROJECT'
+{
+  objects = {
+    CORE = {isa = PBXFileReference; sourceTree = SOURCE_ROOT; path = Frameworks/Python.framework;};
+    EXT = {isa = PBXFileReference; sourceTree = SOURCE_ROOT; path = Frameworks/Python-fixture.framework;};
+    CORE_A = {isa = PBXFileReference; sourceTree = SOURCE_ROOT; path = Frameworks/pythonA.framework;};
+    EXT_A = {isa = PBXFileReference; sourceTree = SOURCE_ROOT; path = Frameworks/PythonAfixture.framework;};
+    BUILD_CORE = {isa = PBXBuildFile; fileRef = CORE;};
+    BUILD_EXT = {isa = PBXBuildFile; fileRef = EXT;};
+    BUILD_CORE_A = {isa = PBXBuildFile; fileRef = CORE_A;};
+    BUILD_EXT_A = {isa = PBXBuildFile; fileRef = EXT_A;};
+    EMBED = {isa = PBXCopyFilesBuildPhase; files = (BUILD_CORE, BUILD_EXT, BUILD_CORE_A, BUILD_EXT_A);};
+    APP = {isa = PBXNativeTarget; name = a-Shell-mini; buildPhases = (EMBED); dependencies = ();};
+  };
+}
+PROJECT
+
+printf 'int fixture_core(void) { return 42; }\n' > "$fixture/core.c"
+printf 'extern int fixture_core(void); int fixture_extension(void) { return fixture_core(); }\n' > "$fixture/extension.c"
+for spec in iphoneos:arm64-apple-ios15.0:ios-arm64 iphonesimulator:arm64-apple-ios15.0-simulator:ios-arm64_x86_64-simulator iphonesimulator:x86_64-apple-ios15.0-simulator:ios-arm64_x86_64-simulator; do
+  IFS=: read -r sdk target slice <<< "$spec"
+  arch=${target%%-*}
+  for name in Python Python-fixture; do
+    bundle="$fixture/Staged/$name.xcframework/$slice/$name.framework"
+    mkdir -p "$bundle"
+    cat > "$bundle/Info.plist" <<PLIST
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>$name</string>
+<key>CFBundleIdentifier</key><string>org.example.$name</string>
+<key>CFBundleName</key><string>$name</string>
+<key>CFBundlePackageType</key><string>FMWK</string>
+</dict></plist>
+PLIST
+    common=(-target "$target" -dynamiclib -Xlinker -headerpad_max_install_names -install_name "@rpath/$name.framework/$name")
+    if [[ $name == Python ]]; then
+      xcrun --sdk "$sdk" clang "${common[@]}" "$fixture/core.c" -o "$bundle/$name.$arch"
+    else
+      core="$fixture/Staged/Python.xcframework/$slice/Python.framework/Python.$arch"
+      xcrun --sdk "$sdk" clang "${common[@]}" "$fixture/extension.c" "$core" -o "$bundle/$name.$arch"
+      printf 'lib/python3.13/fixture.fwork\n' > "$bundle/$name.origin"
+    fi
+  done
+done
+
+for name in Python Python-fixture; do
+  xcframework="$fixture/Staged/$name.xcframework"
+  device="$xcframework/ios-arm64/$name.framework/$name"
+  sim="$xcframework/ios-arm64_x86_64-simulator/$name.framework/$name"
+  mv "$device.arm64" "$device"
+  xcrun lipo -create "$sim.arm64" "$sim.x86_64" -output "$sim"
+  rm "$sim.arm64" "$sim.x86_64"
+  cat > "$xcframework/Info.plist" <<PLIST
+<plist version="1.0"><dict><key>AvailableLibraries</key><array><dict>
+<key>LibraryIdentifier</key><string>ios-arm64</string>
+<key>LibraryPath</key><string>$name.framework</string>
+<key>SupportedArchitectures</key><array><string>arm64</string></array>
+<key>SupportedPlatform</key><string>ios</string>
+</dict><dict>
+<key>LibraryIdentifier</key><string>ios-arm64_x86_64-simulator</string>
+<key>LibraryPath</key><string>$name.framework</string>
+<key>SupportedArchitectures</key><array><string>arm64</string><string>x86_64</string></array>
+<key>SupportedPlatform</key><string>ios</string>
+<key>SupportedPlatformVariant</key><string>simulator</string>
+</dict></array></dict></plist>
+PLIST
+  ditto -c -k --keepParent "$xcframework" "$fixture/$name.xcframework.zip"
+  sha=$(shasum -a 256 "$fixture/$name.xcframework.zip" | cut -d ' ' -f 1)
+  cp "$fixture/$name.xcframework.zip" "$cache/$sha.zip"
+  if [[ $name == Python ]]; then core_sha=$sha; else extension_sha=$sha; fi
+done
+cat > "$fixture/manifest.json" <<MANIFEST
+{
+  "releases": {
+    "Python": {"sha256": "$core_sha", "url": "https://example.invalid/Python.xcframework.zip"},
+    "Python-fixture": {"sha256": "$extension_sha", "url": "https://example.invalid/Python-fixture.xcframework.zip"}
+  },
+  "artifacts": {}, "pending": {}
+}
+MANIFEST
+
+for platform in simulator device; do
+  uv run "$repo/ci/build-app.py" prepare a-Shell-mini "$platform" --root "$fixture" --manifest "$fixture/manifest.json"
+  for name in pythonA PythonAfixture; do
+    bundle="$fixture/Frameworks/$name.framework"
+    [[ $(plutil -extract CFBundleExecutable raw -o - "$bundle/Info.plist") == "$name" ]]
+    [[ $(plutil -extract CFBundleIdentifier raw -o - "$bundle/Info.plist") == "Nicolas-Holzschuch.$name" ]]
+    codesign --verify --strict "$bundle"
+    archs=(arm64)
+    if [[ $platform == simulator ]]; then archs+=(x86_64); fi
+    for arch in "${archs[@]}"; do
+      xcrun otool -arch "$arch" -D "$bundle/$name" | grep -Fx "@rpath/$name.framework/$name"
+      if [[ $name == PythonAfixture ]]; then
+        xcrun otool -arch "$arch" -L "$bundle/$name" | grep -F '@rpath/pythonA.framework/pythonA ('
+        if xcrun otool -arch "$arch" -L "$bundle/$name" | grep -Fq '@rpath/Python.framework/Python ('; then exit 1; fi
+      fi
+    done
+  done
+  cmp "$fixture/Frameworks/Python-fixture.framework/Python-fixture.origin" "$fixture/Frameworks/PythonAfixture.framework/PythonAfixture.origin"
+  xcrun otool -arch arm64 -L "$fixture/Frameworks/Python-fixture.framework/Python-fixture" | grep -F '@rpath/Python.framework/Python ('
+done

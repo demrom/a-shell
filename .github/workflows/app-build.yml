@@ -40,7 +40,7 @@ jobs:
         run: bash tests/cloud-download-wait.sh
   build:
     name: ${{ matrix.scheme }} (${{ matrix.platform }})
-    runs-on: ${{ inputs.runner || 'macos-26-intel' }}
+    runs-on: ${{ matrix.scheme == 'a-Shell' && matrix.platform == 'simulator' && 'macos-26' || inputs.runner || 'macos-26-intel' }}
     # The noPython suite boots independent devices for UI and Photos state.
     timeout-minutes: ${{ matrix.platform == 'simulator' && (matrix.scheme == 'a-Shell-noPython' && 150 || 90) || 60 }}
     strategy:

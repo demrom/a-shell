@@ -32,6 +32,12 @@ cli = typer.Typer(no_args_is_help=True, pretty_exceptions_enable=False)
 console = Console(stderr=True, markup=False, highlight=False)
 
 
+def app_archs(scheme, platform):
+    if (scheme, platform) == ("a-Shell", "simulator"):
+        return {"arm64"}
+    return DESTINATIONS[platform][2]
+
+
 class InputError(Exception):
     pass
 
@@ -154,8 +160,7 @@ def verify_archs(binary, archs):
         raise IncompatibleSlice(f"requires {need}; found {got}")
 
 
-def select_library(framework, platform):
-    _, _, archs = DESTINATIONS[platform]
+def select_library(framework, platform, archs):
     with (framework / "Info.plist").open("rb") as stream:
         libraries = plistlib.load(stream)["AvailableLibraries"]
     variant = "simulator" if platform == "simulator" else None
@@ -201,21 +206,61 @@ def unpack_zip(archive, folder):
         raise InputError("could not extract ZIP")
 
 
-def unpack_framework(archive, member, folder, path, platform):
+def python_a_source(path):
+    if path.suffix != ".framework":
+        return None
+    if path.stem == "pythonA":
+        return "Python"
+    if path.stem.startswith("PythonA") and len(path.stem) > len("PythonA"):
+        return "Python-" + path.stem.removeprefix("PythonA")
+    return None
+
+
+def rename_python_framework(bundle, name):
+    # Keep the second interpreter's identities the same as updatePythonFiles.sh.
+    info = bundle / "Info.plist"
+    plist = plistlib.loads(info.read_bytes())
+    original = plist["CFBundleExecutable"]
+    bundle = bundle.rename(bundle.with_name(f"{name}.framework"))
+    binary = (bundle / original).rename(bundle / name)
+    origin = bundle / f"{original}.origin"
+    if origin.is_file():
+        origin.rename(bundle / f"{name}.origin")
+    plist.update(
+        CFBundleExecutable=name,
+        CFBundleIdentifier="Nicolas-Holzschuch." + name.replace("_", "-"),
+        CFBundleName=name,
+    )
+    (bundle / "Info.plist").write_bytes(plistlib.dumps(plist))
+    rewrite = ["xcrun", "install_name_tool", "-id", f"@rpath/{name}.framework/{name}"]
+    if name != "pythonA":
+        rewrite += [
+            "-change",
+            "@rpath/Python.framework/Python",
+            "@rpath/pythonA.framework/pythonA",
+        ]
+    subprocess.run([*rewrite, binary], check=True)
+    subprocess.run(["codesign", "--force", "--sign", "-", bundle], check=True)
+    return bundle
+
+
+def unpack_framework(archive, member, folder, path, platform, name, archs):
     folder.mkdir()
     if member:
         inner = folder / "framework.zip"
         copy_member(archive, member, inner)
         archive = inner
     unpack_zip(archive, folder)
-    framework = folder / f"{path.stem}.xcframework"
+    framework = folder / f"{name}.xcframework"
     if not framework.is_dir():
         raise InputError(f"ZIP does not contain {framework.name}")
-    library = select_library(framework, platform)
+    library = select_library(framework, platform, archs)
     if path.suffix == ".xcframework":
         return framework
     if library.suffix != path.suffix:
         raise InputError(f"expected a {path.suffix} product, found {library.name}")
+    if name != path.stem:
+        return rename_python_framework(library, path.stem)
     return library
 
 
@@ -226,10 +271,38 @@ def checkout_path(root, path):
     return destination
 
 
-def install(root, path, product, owned):
+def save_ownership(file, state):
+    temporary = file.with_suffix(".tmp")
+    temporary.write_text(json.dumps(state) + "\n")
+    temporary.replace(file)
+
+
+def load_ownership(root, file):
+    if not file.exists():
+        return set()
+    state = json.loads(file.read_text())
+    if isinstance(state, list):
+        return set(state)
+    owned = set(state["installed"])
+    key, device, inode = state["pending"]
+    destination = checkout_path(root, Path(key))
+    try:
+        info = destination.lstat()
+    except FileNotFoundError:
+        pass
+    else:
+        if (info.st_dev, info.st_ino) == (device, inode):
+            owned.add(key)
+    save_ownership(file, sorted(owned))
+    return owned
+
+
+def install(root, path, product, owned, owned_file):
     destination = checkout_path(root, path)
+    key = str(path)
+    new = key not in owned
     if destination.exists() or destination.is_symlink():
-        if str(path) not in owned:
+        if new:
             raise InputError(
                 f"destination already exists: {path}; use a clean worktree"
             )
@@ -238,11 +311,22 @@ def install(root, path, product, owned):
         else:
             destination.unlink()
     destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(product, destination)
-    owned.add(str(path))
+    if new:
+        info = product.lstat()
+        # Journal the staged inode before rename so a retry adopts only our output.
+        save_ownership(
+            owned_file,
+            {"installed": sorted(owned), "pending": [key, info.st_dev, info.st_ino]},
+        )
+    product.rename(destination)
+    if new:
+        owned.add(key)
+        save_ownership(owned_file, sorted(owned))
 
 
-def stage_resources(root, plan, artifacts, get_archive, directory, platform, owned):
+def stage_resources(
+    root, plan, artifacts, get_archive, directory, platform, owned, owned_file
+):
     _, sdk, _ = DESTINATIONS[platform]
     for group_index, (destination, layers) in enumerate(plan.items()):
         group = directory / f"resources-{group_index}"
@@ -264,7 +348,7 @@ def stage_resources(root, plan, artifacts, get_archive, directory, platform, own
             if not subtree.is_dir() or not subtree.resolve().is_relative_to(payload):
                 raise InputError(f"resource directory missing from {member}: {subtree}")
             shutil.copytree(subtree, result, dirs_exist_ok=True, symlinks=True)
-        install(root, Path(destination), result, owned)
+        install(root, Path(destination), result, owned, owned_file)
 
 
 def report(scheme, platform, result):
@@ -288,12 +372,15 @@ def stage(root, manifest, scheme, platform, dry_run):
     missing, options = {}, {}
     for path in sorted(paths):
         checkout_path(root, path)
-        release = data["releases"].get(path.stem)
+        name = path.stem
+        if name not in data["releases"] and name not in artifacts:
+            name = python_a_source(path) or name
+        release = data["releases"].get(name)
         choices = [(release, None)] if release else []
-        if path.stem in artifacts:
-            choices.append(artifacts[path.stem])
+        if name in artifacts:
+            choices.append(artifacts[name])
         if choices:
-            options[path] = choices
+            options[path] = (name, choices)
         else:
             recipe = data["pending"].get(path.stem) or next(
                 (
@@ -309,19 +396,19 @@ def stage(root, manifest, scheme, platform, dry_run):
     if dry_run:
         for path in options:
             print(path)
-        return missing, len(paths)
+        return missing, paths
 
     working = root / ".build/app-frameworks"
     cache = working / "archives"
     cache.mkdir(parents=True, exist_ok=True)
     owned_file = working / "installed.json"
-    owned = set(json.loads(owned_file.read_text())) if owned_file.exists() else set()
+    owned = load_ownership(root, owned_file)
     with (
         tempfile.TemporaryDirectory(dir=working) as directory,
         ThreadPoolExecutor(4) as pool,
     ):
         downloads = {
-            choices[0][0]["sha256"]: choices[0][0] for choices in options.values()
+            choices[0][0]["sha256"]: choices[0][0] for _, choices in options.values()
         }
         futures = {
             sha: pool.submit(fetch, cache, source) for sha, source in downloads.items()
@@ -333,7 +420,12 @@ def stage(root, manifest, scheme, platform, dry_run):
                 futures[sha] = pool.submit(fetch, cache, source)
             return futures[sha].result()
 
-        for index, (path, choices) in enumerate(options.items()):
+        for index, (path, (name, choices)) in enumerate(options.items()):
+            archs = (
+                app_archs(scheme, platform)
+                if path == Path("xcfs/node.xcframework")
+                else DESTINATIONS[platform][2]
+            )
             for attempt, (source, member) in enumerate(choices):
                 try:
                     product = unpack_framework(
@@ -342,8 +434,10 @@ def stage(root, manifest, scheme, platform, dry_run):
                         Path(directory) / f"{index}-{attempt}",
                         path,
                         platform,
+                        name,
+                        archs,
                     )
-                    install(root, path, product, owned)
+                    install(root, path, product, owned, owned_file)
                     break
                 except IncompatibleSlice as error:
                     if attempt == len(choices) - 1:
@@ -354,25 +448,22 @@ def stage(root, manifest, scheme, platform, dry_run):
                     zipfile.BadZipFile,
                     KeyError,
                     plistlib.InvalidFileException,
+                    subprocess.CalledProcessError,
                 ) as error:
                     missing[path] = str(error)
                     break
-        try:
-            if not missing:
-                stage_resources(
-                    root,
-                    data.get("resources", {}).get(scheme, {}),
-                    data["artifacts"],
-                    get_archive,
-                    Path(directory),
-                    platform,
-                    owned,
-                )
-        finally:
-            temporary = owned_file.with_suffix(".tmp")
-            temporary.write_text(json.dumps(sorted(owned)) + "\n")
-            temporary.replace(owned_file)
-    return missing, len(paths)
+        if not missing:
+            stage_resources(
+                root,
+                data.get("resources", {}).get(scheme, {}),
+                data["artifacts"],
+                get_archive,
+                Path(directory),
+                platform,
+                owned,
+                owned_file,
+            )
+    return missing, paths
 
 
 def prepare_inputs(root, manifest, scheme, platform, dry_run=False):
@@ -380,7 +471,7 @@ def prepare_inputs(root, manifest, scheme, platform, dry_run=False):
         raise typer.BadParameter("expected an app scheme and device or simulator")
     manifest = manifest or root / "xcfs/frameworks.json"
     try:
-        missing, count = stage(root, manifest, scheme, platform, dry_run)
+        missing, paths = stage(root, manifest, scheme, platform, dry_run)
     except (
         InputError,
         OSError,
@@ -392,6 +483,7 @@ def prepare_inputs(root, manifest, scheme, platform, dry_run=False):
     ) as error:
         report(scheme, platform, f"Input preparation failed: {error}")
         raise typer.Exit(1) from error
+    count = len(paths)
     if missing:
         lines = [
             f"{len(missing)} of {count} required framework inputs unavailable:",
@@ -404,6 +496,7 @@ def prepare_inputs(root, manifest, scheme, platform, dry_run=False):
         raise typer.Exit(1)
     if not dry_run:
         report(scheme, platform, f"Verified all {count} required framework inputs.")
+    return paths
 
 
 @cli.command()
@@ -427,10 +520,42 @@ def build(
     dry_run: bool = False,
 ):
     """Verify inputs, build the app and check its executable architectures."""
-    prepare_inputs(root, manifest, scheme, platform, dry_run)
+    paths = prepare_inputs(root, manifest, scheme, platform, dry_run)
     if dry_run:
         return
-    destination, sdk, archs = DESTINATIONS[platform]
+    runtimes = [path for path in paths if path.name == "ios_system.xcframework"]
+    if len(runtimes) != 1:
+        report(scheme, platform, "Expected exactly one staged ios_system.xcframework.")
+        raise typer.Exit(1)
+    try:
+        result = subprocess.run(
+            [
+                "bash",
+                Path(__file__).with_name("check-ios-system.sh"),
+                root,
+                root / runtimes[0],
+                platform,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError) as error:
+        detail = (
+            error.stdout
+            if isinstance(error, subprocess.CalledProcessError)
+            else str(error)
+        )
+        report(
+            scheme,
+            platform,
+            f"Pinned ios_system ABI check failed:\n\n```text\n{detail}\n```",
+        )
+        raise typer.Exit(1) from error
+    report(scheme, platform, result.stdout.strip())
+    destination, sdk, _ = DESTINATIONS[platform]
+    archs = app_archs(scheme, platform)
     derived = root / ".build/app" / f"{scheme}-{platform}"
     try:
         derived.mkdir(parents=True, exist_ok=True)
