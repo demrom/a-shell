@@ -539,8 +539,6 @@
 			dstPath = "";
 			dstSubfolderSpec = 13;
 			files = (
-				224A916B2ADD0999006DB9CC /* a-Shell-mini-Intents.appex in Embed App Extensions */,
-				224A916C2ADD0999006DB9CC /* a-Shell-mini-IntentsUI.appex in Embed App Extensions */,
 			);
 			name = "Embed App Extensions";
 			runOnlyForDeploymentPostprocessing = 0;
@@ -2119,8 +2117,6 @@
 			buildRules = (
 			);
 			dependencies = (
-				224A90362ADD0999006DB9CC /* PBXTargetDependency */,
-				224A90382ADD0999006DB9CC /* PBXTargetDependency */,
 			);
 			name = "a-Shell-noPython";
 			packageProductDependencies = (
