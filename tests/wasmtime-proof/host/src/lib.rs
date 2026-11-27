@@ -413,7 +413,13 @@ impl Runner {
         ashell::tty::tty::add_to_linker::<_, wasmtime::component::HasSelf<_>>(&mut linker, |state| state)?;
         let tty = *self.tty.lock().unwrap();
         let mut wasi = wasi_builder(args, output, tty, self.env.lock().unwrap().clone());
+        // inherit_network only permits every address; wasmtime-wasi 49 still denies TCP,
+        // UDP and name lookup unless each is enabled (the stock CLI enables them by
+        // default). Without this, RustScan saw every listener as closed: access-denied.
         wasi.inherit_network()
+            .allow_tcp(true)
+            .allow_udp(true)
+            .allow_ip_name_lookup(true)
             .preopened_dir("/", "/", wasmtime_wasi::FsPerms::ReadWrite)?;
         // An iOS sandbox refuses to open the ancestors of the app container, which a
         // capability lookup from "/" must do. A preopen at the container's own absolute
