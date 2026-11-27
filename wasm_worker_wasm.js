@@ -14,7 +14,7 @@ var process = require('process');
 // These should load a wasm program: http://andrewsweeney.net/post/llvm-to-wasm/
 /* Array of bytes to base64 string decoding */
 // Modules for @wasmer:
-const WASI = require('@wasmer/wasi/lib').WASI;
+const { WASI, WASIExitError } = require('@wasmer/wasi/lib');
 const browserBindings = require('@wasmer/wasi/lib/bindings/browser').default;
 const WasmFs = require('@wasmer/wasmfs').WasmFs;
 // Experiment: don't call lowerI64Imports, see if that works.
@@ -94,13 +94,13 @@ function interactiveKeyboardInput(inputLength) {
 	return bytesToBase64(new TextEncoder().encode(result));
 }
 
-function prompt(string, timeout = 500) {
+function prompt(string) {
 	// Send a request to the outside:
 	sharedArray[0] = 0;
 	Atomics.store(sharedArray, 0, 0);
 	postMessage(["prompt", string]);
 	// Freeze ourselves until the response is ready:
-	Atomics.wait(sharedArray, 0, 0, timeout);
+	Atomics.wait(sharedArray, 0, 0, 500);
 	result = '';
 	// Decode the response (by slices of 8192 bytes):
 	let length = sharedArray[0] - 1;
@@ -135,12 +135,19 @@ function processImports(memory, env) {
 	const encoder = new TextEncoder();
 	const maxRequestBytes = 256 * 1024;
 	const maxVector = 4096;
+	const response = new SharedArrayBuffer(8196);
+	const responseLength = new Int32Array(response, 0, 1);
 
 	function request(message) {
 		const json = JSON.stringify(message);
 		if (json.length > maxRequestBytes || encoder.encode(json).length > maxRequestBytes) return [-errno.tooBig, 0];
-		// The reply uses an untagged mailbox. Do not reuse it while admission is pending.
-		const reply = prompt('ashell-process\n' + json, Infinity);
+		// A late legacy I/O reply must not release a pending process request.
+		Atomics.store(responseLength, 0, 0);
+		postMessage(['processPrompt', 'ashell-process\n' + json, response]);
+		Atomics.wait(responseLength, 0, 0);
+		const length = Atomics.load(responseLength, 0) - 1;
+		// TextDecoder does not accept shared-buffer views in every browser.
+		const reply = decoder.decode(new Uint8Array(response, 4, length).slice());
 		if (!/^-?\d+ \d+$/.test(reply)) return [-errno.io, 0];
 		return reply.split(' ').map(Number);
 	}
@@ -266,7 +273,10 @@ function executeWebAssemblyWorker(bufferString, args, cwd, tty, env) {
 		// We find the type of the error, and return the appropriate error message
 		// This line must be commented on release (it breaks tlmgr):
 		// console.log("Wasm error: " + error.message + " Error code: " + error.code);
-        if (error.code === undefined) {
+		if (error instanceof WASIExitError) {
+			// The browser binding implements ordinary proc_exit by throwing.
+			errorCode = error.code;
+		} else if (error.code === undefined) {
 			errorCode = 1; 
 			errorMessage = 'wasm: ' + error;
 		} else if (error.code != null) { 
