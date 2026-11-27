@@ -398,6 +398,14 @@ function processImports(wasi, memory, env, generation) {
 				return Number.isInteger(error) ? error : -errno.io;
 			}
 		},
+		process_kill(child, signal) {
+			try {
+				const [result] = request({ op: 'kill', child, signal });
+				return result;
+			} catch (error) {
+				return Number.isInteger(error) ? error : -errno.io;
+			}
+		},
 		process_wait(child, flags, status) {
 			try {
 				if (flags & ~1) return -errno.invalid;
