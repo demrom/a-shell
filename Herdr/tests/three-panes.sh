@@ -20,6 +20,7 @@ steps=$(mktemp)
 diagnostics=${HERDR_TEST_LOG_DIR:-}
 started=$(date '+%Y-%m-%d %H:%M:%S')
 if [[ -n $diagnostics ]]; then mkdir -p "$diagnostics"; fi
+observers=()
 
 record_phase() {
 	if [[ -n $diagnostics ]]; then
@@ -30,12 +31,63 @@ record_phase() {
 	fi
 }
 
+input_time() {
+	perl -MTime::HiRes=time -e 'printf "%.3f", time'
+}
+
+capture_ui() {
+	local phase=$1 status=0
+	printf '%s %s capture start\n' "$(input_time)" "$phase" >> "$diagnostics/input-timing.log"
+	# The full AXe tree includes the root PID. Bound the read independently of input.
+	perl -e 'alarm shift; exec @ARGV or die $!' 45 axe describe-ui --udid "$sim" \
+		> "$diagnostics/$phase.ax.json" 2> "$diagnostics/$phase.ax.stderr" || status=$?
+	printf '%s %s capture exit=%s\n' "$(input_time)" "$phase" "$status" >> "$diagnostics/input-timing.log"
+}
+
+observe_first_tap() {
+	local deadline=$((SECONDS + 30)) sends snapshot=
+	while ((SECONDS < deadline)); do
+		sends=$(grep -cF 'HID event performed successfully.' "$diagnostics/hid-onboarding.stderr" || true)
+		if [[ -z $snapshot && $sends -ge 1 ]]; then
+			printf '%s first tap HID send reported\n' "$(input_time)" >> "$diagnostics/input-timing.log"
+			capture_ui after-tap &
+			snapshot=$!
+		fi
+		if [[ $sends -ge 2 ]]; then
+			printf '%s first key HID send reported\n' "$(input_time)" >> "$diagnostics/input-timing.log"
+			break
+		fi
+		[[ ! -s $diagnostics/onboarding.done ]] || break
+		sleep 0.1
+	done
+	if [[ -n $snapshot ]]; then
+		wait "$snapshot" || true
+	else
+		printf '%s first tap HID send unobserved\n' "$(input_time)" >> "$diagnostics/input-timing.log"
+	fi
+}
+
+run_batch() {
+	local phase=$1 status=0
+	if [[ -z $diagnostics ]]; then
+		axe batch --udid "$sim" --file "$steps" >/dev/null
+		return
+	fi
+	printf '%s %s HID batch start\n' "$(input_time)" "$phase" >> "$diagnostics/input-timing.log" || true
+	axe batch --udid "$sim" --file "$steps" --verbose >/dev/null \
+		2> "$diagnostics/hid-$phase.stderr" || status=$?
+	printf '%s %s HID batch exit=%s\n' "$(input_time)" "$phase" "$status" >> "$diagnostics/input-timing.log" || true
+	if ((status != 0)); then tail -25 "$diagnostics/hid-$phase.stderr" >&2 || true; fi
+	return "$status"
+}
+
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
 # shellcheck disable=SC2329
 finish() {
 	local status=$? name pane file log_index=0
 	local predicate='process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")'
 	if [[ -n $diagnostics ]]; then
+		for name in "${observers[@]+${observers[@]}}"; do wait "$name" || true; done
 		record_phase "fixture exit $status" || true
 		cp -R "$receipts" "$diagnostics/fixtures" || true
 		while IFS= read -r -d '' file; do
@@ -44,6 +96,9 @@ finish() {
 		done < <(find "$data" -type f \( -name herdr-client.log -o -name herdr.log \) -print0)
 		xcrun simctl spawn "$sim" log show --start "$started" --style compact \
 			--predicate "$predicate" > "$diagnostics/worker-system.log" 2>&1 || true
+		local focus='(process IN {"SpringBoard", "backboardd", "a-Shell-mini"}) AND (category CONTAINS[c] "focus" OR composedMessage CONTAINS[c] "focus" OR composedMessage CONTAINS[c] "first responder" OR composedMessage CONTAINS[c] "keyboard" OR composedMessage CONTAINS[c] "alert" OR composedMessage CONTAINS[c] "modal")'
+		xcrun simctl spawn "$sim" log show --info --start "$started" --style compact \
+			--predicate "$focus" > "$diagnostics/focus-system.log" 2>&1 || true
 	fi
 	if [[ $status != 0 ]]; then
 		if [[ -n $diagnostics ]]; then
@@ -85,11 +140,21 @@ type_command() {
 	printf 'sleep 0.5\nkey 40\nsleep 2\n'
 }
 wait_output() {
-	local attempt
+	local attempt name="${1#"$receipts/"}"
 	for ((attempt = 0; attempt < 200; attempt++)); do
-		if [ -s "$1" ]; then return 0; fi
+		if [ -s "$1" ]; then
+			if [[ -n $diagnostics ]]; then
+				printf '%s %s receipt mtime_size=%s\n' "$(input_time)" "$name" \
+					"$(stat -f '%m,%z' "$1")" >> "$diagnostics/input-timing.log" || true
+			fi
+			return 0
+		fi
 		sleep 0.1
 	done
+	if [[ -n $diagnostics ]]; then
+		printf '%s %s receipt timeout mtime_size=%s\n' "$(input_time)" "$name" \
+			"$(stat -f '%m,%z' "$1" 2>/dev/null || printf absent)" >> "$diagnostics/input-timing.log" || true
+	fi
 	echo "missing or empty receipt: $1" >&2
 	record_phase "missing or empty receipt ${1##*/}" || true
 	# Record the active UI while the missing command is still on screen.
@@ -123,7 +188,18 @@ record_phase 'first worker observed' || true
 # settings, and Escape closes settings without installing integrations.
 # Without this, the first command's Return only advances onboarding.
 printf 'sleep 2\ntap -x 130 -y 260\nsleep 1\nkey 40\nsleep 1\nkey 41\nsleep 1\n' >"$steps"
-axe batch --udid "$sim" --file "$steps" >/dev/null
+if [[ -n $diagnostics ]]; then
+	: > "$diagnostics/hid-onboarding.stderr"
+	: > "$diagnostics/onboarding.done"
+	capture_ui before-tap &
+	observers+=("$!")
+	observe_first_tap &
+	observers+=("$!")
+fi
+onboarding_status=0
+run_batch onboarding || onboarding_status=$?
+if [[ -n $diagnostics ]]; then printf '%s\n' "$onboarding_status" > "$diagnostics/onboarding.done" || true; fi
+if ((onboarding_status != 0)); then exit "$onboarding_status"; fi
 record_phase 'onboarding keys sent' || true
 pids=()
 failed=0
@@ -136,7 +212,7 @@ for pane in a b c; do
 	fi
 	printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/%s' "${receipts##*/}" "$pane"
 	type_command "$command" >>"$steps"
-	axe batch --udid "$sim" --file "$steps" >/dev/null
+	run_batch "pane-$pane"
 	if wait_output "$receipts/$pane"; then
 		pid=$(cat "$receipts/$pane")
 		case "$pid" in
@@ -151,7 +227,7 @@ for pane in a b c; do
 		sleep 15
 		printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/a-after-idle' "${receipts##*/}"
 		type_command "$command" >"$steps"
-		axe batch --udid "$sim" --file "$steps" >/dev/null
+		run_batch idle
 		if wait_output "$receipts/a-after-idle" && cmp "$receipts/a" "$receipts/a-after-idle"; then
 			printf 'same worker after 15s idle: PASS\n'
 		else
@@ -162,7 +238,7 @@ for pane in a b c; do
 	if [[ $failed == 0 ]]; then
 		printf -v command 'sh ~/Documents/%s/native-cpu-pane.sh %s %s' "${receipts##*/}" "$pane" "${receipts##*/}"
 		type_command "$command" >"$steps"
-		axe batch --udid "$sim" --file "$steps" >/dev/null
+		run_batch "cpu-$pane"
 		wait_output "$receipts/$pane-cpu/ready"
 	fi
 done
@@ -244,7 +320,7 @@ if [ "$failed" -eq 0 ]; then
 		printf -v command 'echo EOF_FOLLOWUP > ~/Documents/%s/eof.next' "${receipts##*/}"
 		type_command "$command"
 	} >"$steps"
-	axe batch --udid "$sim" --file "$steps" >/dev/null
+	run_batch eof
 	wait_output "$receipts/eof.next"
 	printf 'EOF_FOREGROUND_BYTES\n' | cmp - "$receipts/eof.out"
 	printf '0\n' | cmp - "$receipts/eof.status"
@@ -256,10 +332,10 @@ if [ "$failed" -eq 0 ]; then
 	# readiness, then type the next line without waiting for a new prompt.
 	printf -v command 'sh ~/Documents/%s/native-interrupt-pane.sh' "${receipts##*/}"
 	type_command "$command" >"$steps"
-	axe batch --udid "$sim" --file "$steps" >/dev/null
+	run_batch interrupt-ready
 	wait_output "$receipts/interrupt.ready"
 	type_command 'INTERRUPT_FOREGROUND' >"$steps"
-	axe batch --udid "$sim" --file "$steps" >/dev/null
+	run_batch interrupt-input
 	wait_output "$receipts/interrupt.out"
 	printf 'INTERRUPT_FOREGROUND\n' | cmp - "$receipts/interrupt.out"
 	test ! -e "$receipts/interrupt.returned"
@@ -268,7 +344,7 @@ if [ "$failed" -eq 0 ]; then
 		printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/interrupt.next' "${receipts##*/}"
 		type_command "$command"
 	} >"$steps"
-	axe batch --udid "$sim" --file "$steps" >/dev/null
+	run_batch interrupt-next
 	wait_output "$receipts/interrupt.next"
 	cmp "$receipts/c" "$receipts/interrupt.next"
 	printf 'HERDR_NESTED_INTERRUPT_PASS worker=%s\n' "${pids[2]}"
@@ -283,7 +359,7 @@ printf -v command 'printenv ASHELL_WORKER_PID > ~/Documents/%s/detached' "${rece
 type_command "$command" >>"$steps"
 printf -v command 'herdr --version > ~/Documents/%s/reentry' "${receipts##*/}"
 type_command "$command" >>"$steps"
-axe batch --udid "$sim" --file "$steps" >/dev/null
+run_batch detach
 wait_output "$receipts/reentry"
 test -f "$receipts/detached"
 test ! -s "$receipts/detached"

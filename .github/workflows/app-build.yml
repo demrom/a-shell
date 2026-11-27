@@ -49,7 +49,7 @@ jobs:
       matrix:
         scheme: ${{ fromJSON(github.ref_name == 'ci/app-build-herdr-diagnostics' && '["a-Shell-mini"]' || '["a-Shell-noPython","a-Shell-mini","a-Shell"]') }}
         platform: ${{ fromJSON(github.ref_name == 'ci/app-build-herdr-diagnostics' && '["simulator"]' || '["device","simulator"]') }}
-        runner: ${{ fromJSON(github.ref_name == 'ci/app-build-herdr-diagnostics' && '["macos-26-intel","macos-26"]' || '[""]') }}
+        runner: ${{ fromJSON(github.ref_name == 'ci/app-build-herdr-diagnostics' && '["macos-26-intel"]' || '[""]') }}
     env:
       DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
     steps:
@@ -188,11 +188,18 @@ jobs:
           exit "$status"
       - name: Check Herdr start, idle input, three panes, and detach
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.scheme == 'a-Shell-mini' }}
+        shell: bash
         env:
           HERDR_TEST_LOG_DIR: ${{ matrix.runner && format('{0}/herdr-diagnostics', runner.temp) || '' }}
         run: |
           app=.build/app/a-Shell-mini-simulator/Build/Products/Debug-iphonesimulator/a-Shell-mini.app
-          bash tests/simulator-app.sh "$app" Herdr/tests/three-panes.sh ashellmini --confirm-open
+          driver=(bash tests/simulator-app.sh "$app" Herdr/tests/three-panes.sh ashellmini --confirm-open)
+          if [[ -z ${HERDR_TEST_LOG_DIR:-} ]]; then
+            "${driver[@]}"
+          else
+            mkdir -p "$HERDR_TEST_LOG_DIR"
+            "${driver[@]}" 2>&1 | tee "$HERDR_TEST_LOG_DIR/fixture-driver.log"
+          fi
       - name: Retain Herdr Simulator diagnostics
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: ${{ !cancelled() && steps.axe.outcome == 'success' && matrix.runner != '' }}
