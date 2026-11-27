@@ -1,7 +1,7 @@
-diff --git a/WasmKitCommand.swift b/WasmKitCommand.swift
-index 15c9dad..6124445 100644
---- a/WasmKitCommand.swift
-+++ b/WasmKitCommand.swift
+diff --git i/WasmKitCommand.swift w/WasmKitCommand.swift
+index 15c9dad..de785df 100644
+--- i/WasmKitCommand.swift
++++ w/WasmKitCommand.swift
 @@ -6,7 +6,7 @@
  //
  internal import WasmKit
@@ -64,10 +64,16 @@ index 15c9dad..6124445 100644
      func link(to imports: inout Imports, store: Store) {
          imports.define(module: "ashell_v1", name: "process_spawn",
                         Function(store: store, parameters: Array(repeating: .i32, count: 10), results: [.i32]) { caller, args in
-@@ -135,12 +151,38 @@ private final class ProcessBridge {
+@@ -135,12 +151,44 @@ private final class ProcessBridge {
                  try self.wait(memory: $0, child: Int32(bitPattern: args[0].i32), flags: args[1].i32, output: args[2].i32)
              }
          })
++        imports.define(module: "ashell_v1", name: "process_kill",
++                       Function(store: store, parameters: [.i32, .i32], results: [.i32]) { caller, args in
++            self.call(caller: caller) { _ in
++                try self.kill(child: Int32(bitPattern: args[0].i32), signal: Int32(bitPattern: args[1].i32))
++            }
++        })
 +        imports.define(module: "ashell_v1", name: "process_pipe",
 +                       Function(store: store, parameters: [.i32], results: [.i32]) { caller, args in
 +            self.call(caller: caller) { memory in
@@ -103,7 +109,7 @@ index 15c9dad..6124445 100644
          catch { return [.i32(UInt32(bitPattern: -29))] }
      }
 
-@@ -183,11 +225,48 @@ private final class ProcessBridge {
+@@ -183,11 +231,48 @@ private final class ProcessBridge {
          }
      }
 
@@ -153,7 +159,7 @@ index 15c9dad..6124445 100644
          try check(memory, offset: output, length: 4)
          let path = try string(memory, offset: arguments[0], length: Int(arguments[1]))
          let argv = try vector(memory, offset: arguments[2], count: Int(arguments[3]))
-@@ -209,11 +288,15 @@ private final class ProcessBridge {
+@@ -209,11 +294,15 @@ private final class ProcessBridge {
          let variables = env.map { strdup($0) }
          defer { args.forEach { free($0) }; variables.forEach { free($0) } }
          guard !args.contains(nil), !variables.contains(nil) else { return wasiError(ENOMEM) }
@@ -174,7 +180,7 @@ index 15c9dad..6124445 100644
              }
              var child: pid_t = 0
              let error = (args + [nil]).withUnsafeBufferPointer { args in
-@@ -230,12 +313,13 @@ private final class ProcessBridge {
+@@ -230,12 +319,13 @@ private final class ProcessBridge {
 
      private func wait(memory: Memory, child: pid_t, flags: UInt32, output: UInt32) throws -> Int32 {
          guard flags & ~1 == 0 else { throw ABIError.invalid }
@@ -189,16 +195,31 @@ index 15c9dad..6124445 100644
                      var status: Int32 = 0
                      let result = ios_wait4(candidate, &status, WNOHANG, nil, nil)
                      let error = result < 0 ? errno : 0
-@@ -256,7 +340,7 @@ private final class ProcessBridge {
+@@ -256,7 +346,22 @@ private final class ProcessBridge {
          } while true
      }
 
 -    private func withoutCancellation<T>(_ body: () throws -> T) rethrows -> T {
++    private func kill(child: pid_t, signal: Int32) throws -> Int32 {
++        guard (0..<65).contains(signal) else { throw ABIError.invalid }
++        guard child > 0 else { throw ABIError.unsupported }
++        guard children.contains(child) else { return wasiError(ESRCH) }
++        // The allowed wasi-libc signals use the same numbers on Darwin.
++        switch signal {
++        case 0, 1, 2, 3, 9, 15:
++            let error = ios_kill_worker(child, signal)
++            if error == ESRCH { children.remove(child) }
++            return error == 0 ? 0 : wasiError(error)
++        default:
++            throw ABIError.unsupported
++        }
++    }
++
 +    private static func withoutCancellation<T>(_ body: () throws -> T) rethrows -> T {
          var previous: Int32 = 0
          pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous)
          defer { pthread_setcancelstate(previous, nil) }
-@@ -264,7 +348,7 @@ private final class ProcessBridge {
+@@ -264,7 +369,7 @@ private final class ProcessBridge {
      }
 
      func finish() {
@@ -207,7 +228,7 @@ index 15c9dad..6124445 100644
              retireRemainingChildren()
              threadCleanup?.active.removeAll { $0 === self }
              threadCleanup = nil
-@@ -355,19 +439,18 @@ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer
+@@ -355,19 +460,18 @@ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer
              let currentDirectory = FileManager().currentDirectoryPath
              let tty = TTYBridge()
              defer { tty.restore() }

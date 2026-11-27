@@ -64,11 +64,11 @@ fetch "https://codeload.github.com/holzschu/WasmKit/tar.gz/$engine" \
 # One-off CI preview: use the fork's artifact while it is retained. The
 # anonymous mirror avoids configuring a cross-repository Actions credential.
 # Verify both the Actions archive and the selected XCFramework member.
-runtime_archive="$downloads/ios_system-15214330579.zip"
-fetch https://nightly.link/demrom/ios_system/actions/artifacts/15214330579.zip \
-  a3253a91e48f53fdf75e041f139904a6c8b72155179dd629a9eb6e2e8d558800 "$runtime_archive"
+runtime_archive="$downloads/ios_system-15231931433.zip"
+fetch https://nightly.link/demrom/ios_system/actions/artifacts/15231931433.zip \
+  c2c3f1a0bb3f2f256448cadd0a93d4d3f49e240ea218ba929908fa58d29b1bff "$runtime_archive"
 unzip -p "$runtime_archive" .build/ios_system.xcframework.zip > "$stage/ios_system.xcframework.zip"
-printf '%s  %s\n' 3faa0572de58c76181bf20235e21e8ae02505e0585040a3551911a692edc0625 \
+printf '%s  %s\n' 7a0e3cf02cd858a01c08c7d06b6f97fe0d6ed4b5102661f5a6d9b51eed62b1ef \
   "$stage/ios_system.xcframework.zip" | shasum -a 256 -c -
 source="$stage/source"
 mkdir -p "$source/WasmKit"
@@ -130,6 +130,7 @@ verify_slice() {
     test "$(awk '$1 == "platform" { print $2 }' <<<"$info")" = "$platform"
     test "$(awk '$1 == "minos" { print $2 }' <<<"$info")" = "$minimum"
     xcrun nm -arch "$arch" -gU "$binary" | awk '$NF == "_wasmkit" { found = 1 } END { exit !found }'
+    xcrun nm -arch "$arch" -u "$binary" | awk '$NF == "_ios_kill_worker" { found = 1 } END { exit !found }'
     xcrun otool -arch "$arch" -L "$binary" |
       awk '$1 == "@rpath/ios_system.framework/ios_system" { found = 1 } END { exit !found }'
     printf '%s %s %s minOS=%s\n' "$slice" "$arch" "$platform" "$minimum" | tee -a "$dist/slices.txt"
@@ -161,6 +162,9 @@ if "$smoke"; then
   xxd -r -p "$root/tests/wasmkit/pipe.hex" "$app/pipe.wasm"
   printf '80f9a8e6b15ad6ce26472a63caa6dc5e27fb64c33e7df8f9e441f87ce6cf402d  %s\n' \
     "$app/pipe.wasm" | shasum -a 256 -c -
+  xxd -r -p "$root/tests/wasmkit/kill-unowned.hex" "$app/kill-unowned.wasm"
+  printf 'cdfc9f70afafd7c3bd1a9e64452ed9a445b7e9021f945ff5e1c4a8292ae2c13f  %s\n' \
+    "$app/kill-unowned.wasm" | shasum -a 256 -c -
   cp "$root/tests/wasmkit/Info.plist" "$root/tests/wasmkit/commandDictionary.plist" "$app/"
   codesign --force --sign - "$frameworks/$name.framework"
   codesign --force --sign - "$frameworks/ios_system.framework"
@@ -181,7 +185,8 @@ if "$smoke"; then
   tee <"$dist/hello.stdout"
   tee <"$dist/hello.stderr" >&2
   test "$status" = 0
-  diff -u <(printf 'Hello from WASI!\nprocess-pipe-ok\n') "$dist/hello.stdout"
+  diff -u <(printf 'Hello from WASI!\nprocess-pipe-ok\nprocess-kill-ok\n') "$dist/hello.stdout"
   grep -Fxq 'wasmkit hello.wasm: status=0' "$dist/hello.stderr"
   grep -Fxq 'wasmkit pipe.wasm: status=0' "$dist/hello.stderr"
+  grep -Fxq 'wasmkit kill-unowned.wasm: status=0' "$dist/hello.stderr"
 fi

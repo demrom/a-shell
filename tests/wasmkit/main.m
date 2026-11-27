@@ -18,7 +18,9 @@ int main(void) {
         fprintf(stderr, "wasmkit hello.wasm: status=%d\n", helloStatus);
         int pipeStatus = ios_system("wasmkit pipe.wasm");
         fprintf(stderr, "wasmkit pipe.wasm: status=%d\n", pipeStatus);
+        int killStatus = ios_system("wasmkit kill-unowned.wasm");
+        fprintf(stderr, "wasmkit kill-unowned.wasm: status=%d\n", killStatus);
         ios_closeSession(session);
-        return helloStatus != 0 || pipeStatus != 0;
+        return helloStatus != 0 || pipeStatus != 0 || killStatus != 0;
     }
 }
