@@ -35,7 +35,7 @@ function executeWebAssembly(bufferString, args, cwd, tty, env) {
 	inputString = '';
 	commandIsRunning = true;
 	// create a webWorker to run webAssembly code:
-	wasmWorker.postMessage([bufferString, args, cwd, tty, env, sab]);
+	wasmWorker.postMessage([bufferString, args, cwd, tty, env, sab, globalThis.ashellProcessGeneration]);
 	let result = "";
 	
 	// Dealing with communications with the system:

@@ -37,6 +37,10 @@ The `spawn-attributes` fixture accepts GNU's `POSIX_SPAWN_USEVFORK` hint without
 
 For a focused WebView mailbox regression off-device, run `node tests/process-api/webview-mailbox.cjs APP_BUNDLE SPAWN_WAIT_WASM`. Use the unpacked a-Shell mini bundle for its Wasmer dependencies. The test executes both repository browser scripts and injects a late WebKit prompt completion; pass `APP_BUNDLE` again as the scripts directory to test the scripts installed in that bundle. You can also pass `execvp.wasm` as the guest, a scripts directory and `7` as the expected status to verify that `proc_exit` produces no diagnostic. Neither test replaces the live WebKit run.
 
+## WebView descriptor boundary
+
+`node tests/process-api/webview-fd.cjs RESOURCES GUEST_WASM [pipe|popen|table|errors]` runs the actual worker, page scripts and bundled Wasmer. Only the outer WebKit prompt is stubbed. Use `Resources_mini` and `Resources` to check both vendored bundles. The `pipe` row takes the compact descriptor ABI WAT smoke; `popen` takes the compiled `popen.c` overlay guest. Build `webview-fd-table.c` with the same overlay for `table`: it opens an ordinary file after a pipe was duplicated over stdin and checks that neither stdout nor stderr is replaced. `errors` takes `webview-fd-errors.c` and requires a malformed pipe reply to publish no guest FDs and a close error to release the guest FD slot. The Node rows do not prove Swift host I/O or ExtensionKit admission.
+
 ## `popen` and `pclose`
 
 `tests/process-api/popen.c` uses only POSIX calls. Once the FD path is implemented, build it with the same overlay and run it in both engines. It requires the child output and EOF from `popen("…", "r")`, an encoded exit 7 from `pclose`, and exactly `process-popen-ok` on guest stdout with guest exit 0. Stock SDK 34 cannot build it: with the wait header supplied, `popen` and `pclose` are undeclared. This is not part of the spawn/wait preview.
