@@ -197,7 +197,15 @@ if [ "$failed" -eq 0 ]; then
 		if [[ -s $receipts/a-cpu/finished && -s $receipts/b-cpu/finished && -s $receipts/c-cpu/finished ]]; then break; fi
 		sleep 0.5
 	done
-	if [[ $attempt == 240 ]]; then echo 'Three native AWK workloads did not finish' >&2; exit 1; fi
+	if [[ $attempt == 240 ]]; then
+		echo 'Three native AWK workloads did not finish' >&2
+		for index in "${!pids[@]}"; do
+			pid=${pids[index]}
+			printf 'Worker %s CPU time before release: %ss\n' "$pid" "${before[index]}" >&2
+			ps -p "$pid" -o pid -o stat -o time -o %cpu >&2 || true
+		done
+		exit 1
+	fi
 	deltas=()
 	index=0
 	for pane in a b c; do
@@ -208,7 +216,7 @@ if [ "$failed" -eq 0 ]; then
 		[[ $(head -1 "$receipts/$pane-cpu/finished") == "$pid" ]]
 		grep -Fqx "$pane-cpu" "$receipts/$pane-cpu/relative.txt"
 		awk -v pane="$pane-cpu" 'NR==2 && $0 !~ ("/" pane "$") {exit 1} NR==3 && $0!=pane {exit 1} END {if (NR!=3) exit 1}' "$receipts/$pane-cpu/finished"
-		awk 'NR!=1 || $1<1.99999e16 || $1>2.00001e16 {exit 1} END {if (NR!=1) exit 1}' "$receipts/$pane-cpu/result"
+		printf '1249999975000000\n' | cmp - "$receipts/$pane-cpu/result"
 		index=$((index+1))
 	done
 	end=$(monotonic_seconds)

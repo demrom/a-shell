@@ -1,4 +1,4 @@
 BEGIN {
-    for (i = 0; i < 200000000; i++) total += i
-    print total
+    for (i = 0; i < 50000000; i++) total += i
+    printf "%.0f\n", total
 }
