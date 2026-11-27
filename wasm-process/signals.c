@@ -5,11 +5,14 @@
 #define _WASI_EMULATED_SIGNAL 1
 #endif
 
+#include <ashell/process.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdlib.h>
 #include <time.h>
 #include <unistd.h>
+
+#include "process-signals.h"
 
 #define ASHELL_NSEC UINT64_C(1000000000)
 #define ASHELL_SIGNAL_BIT(number) (UINT64_C(1) << ((number) - 1))
@@ -20,6 +23,8 @@ static struct sigaction actions[_NSIG];
 static sigset_t mask;
 static sigset_t pending;
 static uint64_t deadline;
+static int32_t watched_child;
+static ashell_wait_function peek_child;
 
 static int failure(int error) {
     errno = error;
@@ -66,6 +71,28 @@ static int collect_alarm(void) {
         pending |= ASHELL_SIGNAL_BIT(SIGALRM);
     }
     return 0;
+}
+
+void ashell_signal_watch_child(int32_t requested, int32_t result, ashell_wait_function wait_function) {
+    // A WNOHANG miss arms the usual waitpid/sigsuspend loop. Rearm only
+    // after another miss, so an unreaped child cannot wake repeatedly.
+    if (result == 0) {
+        watched_child = requested;
+        peek_child = wait_function;
+    } else if (requested == watched_child || result == watched_child) {
+        watched_child = 0;
+    }
+}
+
+static int collect_signals(void) {
+    int alarm_error = collect_alarm() < 0 ? errno : 0;
+    if (watched_child) {
+        int32_t result = peek_child(watched_child, ASHELL_WAIT_PEEK, NULL);
+        if (result > 0) pending |= ASHELL_SIGNAL_BIT(SIGCHLD);
+        if (result != 0) watched_child = 0;
+        if (result < 0 && result != -ECHILD && result != -EINVAL && result != -ENOTSUP) return failure(-result);
+    }
+    return alarm_error ? failure(alarm_error) : 0;
 }
 
 static int default_ignored(int number) {
@@ -119,12 +146,17 @@ int sigprocmask(int how, const sigset_t *set, sigset_t *old) {
         }
     }
     if (old) *old = previous;
-    if (set && collect_alarm() == 0) while (dispatch()) {}
+    if (set) {
+        int saved_errno = errno;
+        collect_signals();
+        errno = saved_errno;
+        while (dispatch()) {}
+    }
     return 0;
 }
 
 int sigpending(sigset_t *set) {
-    if (collect_alarm() < 0) return -1;
+    if (collect_signals() < 0) return -1;
     *set = pending & mask;
     return 0;
 }
@@ -144,13 +176,19 @@ int sigsuspend(const sigset_t *temporary) {
     mask = *temporary & ~ASHELL_UNBLOCKABLE;
     int error;
     for (;;) {
-        if (collect_alarm() < 0) { error = errno; break; }
+        int collection_error = collect_signals() < 0 ? errno : 0;
         if (dispatch()) { error = EINTR; break; }
-        if (!deadline || (mask & ASHELL_SIGNAL_BIT(SIGALRM))) { error = ENOTSUP; break; }
-        uint64_t current;
-        if (now(&current) < 0) { error = errno; break; }
-        if (current >= deadline) continue;
-        uint64_t remaining = deadline - current;
+        if (collection_error) { error = collection_error; break; }
+        int alarm_can_wake = deadline && !(mask & ASHELL_SIGNAL_BIT(SIGALRM));
+        int child_can_wake = watched_child && !(mask & ASHELL_SIGNAL_BIT(SIGCHLD));
+        if (!alarm_can_wake && !child_can_wake) { error = ENOTSUP; break; }
+        uint64_t remaining = 20000000;
+        if (alarm_can_wake) {
+            uint64_t current;
+            if (now(&current) < 0) { error = errno; break; }
+            if (current >= deadline) continue;
+            if (!child_can_wake || deadline - current < remaining) remaining = deadline - current;
+        }
         struct timespec interval = {(time_t)(remaining / ASHELL_NSEC), (long)(remaining % ASHELL_NSEC)};
         if (nanosleep(&interval, NULL) < 0 && errno != EINTR) { error = errno; break; }
     }

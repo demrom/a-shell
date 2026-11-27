@@ -1,5 +1,8 @@
 #define _POSIX_C_SOURCE 200809L
 #include <errno.h>
+// Gnulib may expose the libc signal-set type through I/O headers first.
+#include <sys/select.h>
+#include <poll.h>
 #include <signal.h>
 #include <stdio.h>
 #include <time.h>

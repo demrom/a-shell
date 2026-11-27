@@ -11,6 +11,8 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "process-signals.h"
+
 _Static_assert(sizeof(uintptr_t) == 4, "The process ABI requires wasm32");
 _Static_assert(sizeof(ashell_process_slice) == 8, "Invalid process slice layout");
 _Static_assert(sizeof(ashell_process_action) == 12, "Invalid process action layout");
@@ -126,6 +128,7 @@ pid_t waitpid(pid_t child, int *status, int options) {
     }
     int32_t encoded;
     int32_t result = ashell_process_wait(child, options & WNOHANG ? ASHELL_WAIT_NOHANG : 0, &encoded);
+    if (ashell_signal_watch_child) ashell_signal_watch_child(child, result, ashell_process_wait);
     if (result < 0) {
         errno = -result;
         return -1;
@@ -171,7 +174,10 @@ int system(const char *command) {
     return wait_for_child(child);
 }
 
+__attribute__((weak)) uint32_t ashell_fork_exec_flags(void);
+
 static int exec_worker(const char *path, char *const argv[], char *const envp[], uint32_t flags) {
+    if (ashell_fork_exec_flags) flags |= ashell_fork_exec_flags();
     pid_t child;
     int error = spawn_child(&child, path, NULL, NULL, argv, envp, flags);
     if (error != 0) {

@@ -17,7 +17,9 @@ extern "C" {
 enum {
     ASHELL_SPAWN_SEARCH_PATH = 1,
     ASHELL_SPAWN_INHERIT_ENV = 2,
+    ASHELL_SPAWN_FORK_EXEC = 4,
     ASHELL_WAIT_NOHANG = 1,
+    ASHELL_WAIT_PEEK = 2,
     ASHELL_PROCESS_MAX_VECTOR = 4096,
 };
 
@@ -55,7 +57,9 @@ int32_t ashell_process_spawn(
     uint32_t flags, int32_t *child);
 
 /* Return the reaped child, or 0 with NOHANG if it is still running.
- * On a positive return, status contains the POSIX wait status. */
+ * On a positive return, status contains the POSIX wait status. Alternatively,
+ * PEEK is a non-consuming readiness check: it returns a waitable child or 0
+ * while running, never accesses status and cannot combine with NOHANG. */
 ASHELL_PROCESS_IMPORT("process_wait")
 int32_t ashell_process_wait(int32_t child, uint32_t flags, int32_t *status);
 
@@ -73,6 +77,12 @@ int32_t ashell_process_pipe(int32_t pair[2]);
 /* Replace target with an alias of source without consuming source. */
 ASHELL_PROCESS_IMPORT("process_dup2")
 int32_t ashell_process_dup2(int32_t source, int32_t target);
+
+/* Asyncify continuation boundary. Data contains the 8-byte Binaryen cursor
+ * and limit followed by the capture area. Returns 0 to the child prelude,
+ * the admitted worker PID to the parent, or a negative errno to the parent. */
+ASHELL_PROCESS_IMPORT("process_fork")
+int32_t ashell_process_fork(void *data, uint32_t length);
 
 #undef ASHELL_PROCESS_IMPORT
 

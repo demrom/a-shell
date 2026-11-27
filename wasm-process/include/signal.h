@@ -2,7 +2,6 @@
 #define ASHELL_SIGNAL_H
 
 #include_next <signal.h>
-#include <stdint.h>
 #include <sys/types.h>
 
 #ifdef __cplusplus
@@ -13,8 +12,7 @@ int kill(pid_t, int);
 
 #if defined(_POSIX_SOURCE) || defined(_POSIX_C_SOURCE) || defined(_XOPEN_SOURCE) || defined(_GNU_SOURCE) || defined(_BSD_SOURCE)
 // The SDK supplies the signal numbers, but not POSIX masks or dispositions.
-// These types belong to this single-threaded WASI compatibility layer.
-typedef uint64_t sigset_t;
+#include <__typedef_sigset_t.h>
 struct sigaction {
     void (*sa_handler)(int);
     sigset_t sa_mask;

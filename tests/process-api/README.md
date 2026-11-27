@@ -64,7 +64,28 @@ WASI SDK 34's `-lwasi-emulated-signal` exports `signal` and `raise` but has no `
 
 Run `wasm ./signal-mask.wasm` and `wasmkit ./signal-mask.wasm` as separate mini terminal commands. Both must print exactly `process-signal-mask-ok` with status 0 and empty stderr. The fixture checks delivery during `sigsuspend`, the mask inside the handler, restoring the caller's mask and cancelling an alarm.
 
-State is local to the guest. Alarm delivery is cooperative at signal calls, not asynchronous during arbitrary code or I/O. `sigsuspend` currently waits for unmasked pending signals or the guest's monotonic alarm; it returns ENOTSUP when there is no deliverable source. This does not send or subscribe to host signals, stop or resume guests, or queue real-time signals.
+State is local to the guest. Alarm delivery is cooperative at signal calls, not asynchronous during arbitrary code or I/O. Link `process.c` and `signals.c` together for the `waitpid(WNOHANG)`/`sigsuspend` pattern: a miss arms the last requested child (or any owned child for PID -1). Readiness schedules one guest SIGCHLD without consuming the wait result. `wait-peek.c` checks the raw ABI and `wait-signal.c` checks the POSIX loop; both expect their named marker, status 0 and empty stderr. There is no signal when an unarmed child completes. Separate positive-PID misses replace the previous watch; use `waitpid(-1, ..., WNOHANG)` for an any-child watch. `sigsuspend` returns ENOTSUP when there is no deliverable source.
+
+For readiness error isolation, build `signal-pending.c` with `-D_WASI_EMULATED_SIGNAL`, `process.c` and `signals.c`. Run `node --no-warnings tests/process-api/signal-pending-host.cjs signal-pending.wasm`. The harness uses real Preview 1 and an older broker boundary that rejects PEEK. Expect `process-signal-pending-ok`, status 0, and empty stderr: an expired alarm wakes suspend, and successful unmask delivers a second pending alarm without leaking the probe's errno. This does not send or subscribe to host signals, stop or resume guests, or queue real-time signals.
+
+## Restricted `fork` and `vfork`
+
+Use stock SDK 34 and Binaryen 133. Build single-threaded wasm32 C modules with the fork overlay and export the compiler stack pointer before transforming all paths that can reach `process_fork`:
+
+```sh
+for fixture in fork-exec fork-grown plain-fork; do
+    "$WASI_SDK_PATH/bin/clang" -O2 -std=c17 -Wall -Wextra -Werror \
+        -I wasm-process/include "tests/process-api/$fixture.c" \
+        wasm-process/process.c wasm-process/fork.c -Wl,--export=__stack_pointer -o "$fixture.raw.wasm"
+    wasm-opt "$fixture.raw.wasm" --asyncify --pass-arg=asyncify-imports@ashell_v1.process_fork \
+        -o "$fixture.wasm"
+    wasm-tools validate "$fixture.wasm"
+done
+```
+
+The first row checks child-only `close` and `dup2`, a native worker's output through a pipe and EOF, and wait status 7. Expect `process-fork-child` and `process-fork-parent` in that order. The second exercises the WasmKit copy path after guest memory has grown, the scoped parent/child identities, and isolation before `execvp`. Expect `process-fork-grown-ok`. The third attempts child output and exit without exec. It must print only `process-plain-fork-unsupported`. Run each module separately via `wasm` and `wasmkit`; all three need status 0 and empty stderr.
+
+The parent is suspended during the child prelude. The prelude inherits private linear memory (up to 32 MiB) and borrows FD identities for local `close`/`dup2`; only final stdio is handed to a worker. No writes or unrelated process calls are allowed from the prelude. An admitted exec transfers the actual worker PID to the parent, and ordinary wait consumes that worker. Without exec the parent gets ENOTSUP; a rejected admission is not a manufactured child status. This is not arbitrary process cloning, native `fork`, or a shared-stack `vfork`. Only the SDK stack pointer and linear memory are copied; modules with other mutable WebAssembly globals, mutated indirect tables, shared memory or threads are outside this ABI. Prelude identity values are guest-local and cannot be signaled; process groups remain unsupported.
 
 ## Interrupt a guest with a live worker
 
