@@ -48,74 +48,130 @@ run_batch() {
 	return "$status"
 }
 
-before_focus_deadline() {
-	local remaining=$(($1 - SECONDS))
-	shift
-	((remaining > 0)) || return 124
-	if ((remaining > 25)); then remaining=25; fi
-	perl -e 'alarm shift; exec @ARGV or die $!' "$remaining" "$@"
+focus_operation() {
+	local phase=$1 action=$2 remaining=$(($3 - SECONDS)) status=0
+	shift 3
+	if ((remaining <= 0)); then
+		printf '%s %s %s deadline exhausted exit=124\n' "$(input_time)" "$phase" "$action" >&2
+		return 124
+	fi
+	if ((remaining > 30)); then remaining=30; fi
+	printf '%s %s %s start limit=%ss\n' "$(input_time)" "$phase" "$action" "$remaining" >&2
+	perl -e 'alarm shift; exec @ARGV or die $!' "$remaining" "$@" || status=$?
+	if ((status == 142)); then status=124; fi # SIGALRM
+	printf '%s %s %s exit=%s\n' "$(input_time)" "$phase" "$action" "$status" >&2
+	return "$status"
 }
 
 terminal_responder() {
 	# An in-app AX tree (or a successful HID send) alone cannot prove keyboard focus.
 	local predicate='(category == "KeyboardSceneDelegate" AND composedMessage CONTAINS "_inputViewsForResponder: <") OR (category == "Client" AND composedMessage CONTAINS "resignFirstResponder")'
-	before_focus_deadline "$1" xcrun simctl spawn "$sim" log show \
+	focus_operation "$1" responder-read "$2" xcrun simctl spawn "$sim" log show \
 		--info --start "$started" --style compact --process "$host_pid" --predicate "$predicate" |
 		awk '/_inputViewsForResponder:|resignFirstResponder/ { last = $0 } END { print last }'
 }
 
-focus_terminal() {
-	local phase=$1 tap_required=$2 deadline=$((SECONDS + 90)) tapped=0 closed='' tree='' tip latest=''
-	local prior='' stable_since=0
-	local x=130 y=260
+terminal_tree() {
+	local tree
+	tree=$(focus_operation "$1" "$2" "$3" axe describe-ui --udid "$sim") || return
+	jq -e --argjson pid "$host_pid" --argjson x "$4" --argjson y "$5" '
+		any(.. | objects; .type? == "TextArea" and .pid == $pid and .enabled == true and
+			(.frame | .x <= $x and .x + .width > $x and .y <= $y and .y + .height > $y))' <<<"$tree" >/dev/null || return
+	printf '%s\n' "$tree"
+}
+
+toolbar_tip_close() {
+	# Extra keys can be followed by Arrows. Require a single enabled Close in
+	# the same app and use its observed frame, avoiding a second AX lookup.
+	jq -er --argjson pid "$host_pid" '
+		[.. | objects] as $nodes |
+		[$nodes[] | select(.AXUniqueId? == "PopoverDismissRegion" and .pid == $pid)] |
+		select(length == 1) | .[0].frame as $region |
+		[$nodes[] | select(.type? == "Button" and .AXUniqueId == "xmark.circle.fill")] |
+		select(length == 1) | .[0] |
+		select(.enabled == true and .AXLabel == "Close" and .pid == $pid) | .frame as $button |
+		select($button | .width > 0 and .height > 0 and .x >= $region.x and .y >= $region.y and
+			.x + .width <= $region.x + $region.width and .y + .height <= $region.y + $region.height) |
+		[$nodes[] | select(.type? == "Heading" and .pid == $pid) | .AXLabel |
+			if . == "Extra keys: tab, control, escape, paste and the four arrows" then "extra-keys"
+			elif . == "Arrows: flick to move once, keep holding to repeat" then "arrows" else empty end] |
+		unique | select(length == 1) |
+		[.[0], ($button.x + $button.width / 2), ($button.y + $button.height / 2)] | @tsv'
+}
+
+has_dismiss_region() {
+	jq -e 'any(.. | objects; .AXUniqueId? == "PopoverDismissRegion")' >/dev/null
+}
+
+dismiss_toolbar_tips() {
+	local phase=$1 x=$2 y=$3 deadline=$((SECONDS + 150)) tree='' sample close tip close_x close_y
+	local saw_tip=0 clean_since=0 last_tip='' last_tap=0 taps=0
 	while ((SECONDS < deadline)); do
-		if tree=$(before_focus_deadline "$deadline" axe describe-ui --udid "$sim") &&
-			jq -e --argjson pid "$host_pid" --argjson x "$x" --argjson y "$y" '
-				any(.. | objects; .type? == "TextArea" and .pid == $pid and .enabled == true and
-					(.frame | .x <= $x and .x + .width > $x and .y <= $y and .y + .height > $y))' <<<"$tree" >/dev/null; then
-			if jq -e 'any(.. | objects; .AXUniqueId? == "PopoverDismissRegion")' <<<"$tree" >/dev/null; then
-				stable_since=0
-				# Closing Extra keys can expose the app's next toolbar tip. Tap only the single
-				# Close button on a tree with one of these known headings.
-				if tip=$(jq -er '
-					[.. | objects] as $nodes |
-					select([$nodes[] | select(.type? == "Button" and .AXUniqueId == "xmark.circle.fill")] |
-						length == 1 and .[0].enabled == true and .[0].AXLabel == "Close") |
-					[$nodes[] | select(.type? == "Heading") | .AXLabel |
-						if . == "Extra keys: tab, control, escape, paste and the four arrows" then "extra-keys"
-						elif . == "Arrows: flick to move once, keep holding to repeat" then "arrows" else empty end] |
-					unique | select(length == 1) | first' <<<"$tree") && [[ $tip != "$closed" ]]; then
-					if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-$tip.ax.json"; fi
-					if before_focus_deadline "$deadline" axe tap --udid "$sim" --id xmark.circle.fill --element-type Button; then
-						printf 'Dismissed toolbar tip: %s\n' "$tip"
-						closed=$tip
-						tapped=0
-						tap_required=1
+		if sample=$(terminal_tree "$phase" dismiss-ax "$deadline" "$x" "$y"); then
+			tree=$sample
+			if has_dismiss_region <<<"$tree"; then
+				saw_tip=1
+				clean_since=0
+				if close=$(toolbar_tip_close <<<"$tree"); then
+					IFS=$'\t' read -r tip close_x close_y <<<"$close"
+					if [[ $tip != "$last_tip" ]]; then
+						last_tip=$tip
+						taps=0
 					fi
+					if ((taps < 2 && (taps == 0 || SECONDS - last_tap >= 3))); then
+						if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-$tip.ax.json"; fi
+						# Always confirm dismissal with AX, including after a failed HID call.
+						focus_operation "$phase" "close-$tip ($close_x,$close_y)" "$deadline" \
+							axe tap --udid "$sim" -x "$close_x" -y "$close_y" >&2 || true
+						last_tap=$SECONDS
+						taps=$((taps + 1))
+					fi
+				fi
+			elif ((saw_tip == 0 || (clean_since > 0 && SECONDS - clean_since >= 2))); then
+				if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-before-tap.ax.json"; fi
+				printf '%s %s dismiss region absent\n' "$(input_time)" "$phase" >&2
+				return 0
+			else
+				if ((clean_since == 0)); then clean_since=$SECONDS; fi
+			fi
+		else
+			clean_since=0
+		fi
+		sleep 0.3
+	done
+	if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-dismiss-timeout.ax.json"; fi
+	printf '%s %s dismiss deadline exhausted exit=124\n' "$(input_time)" "$phase" >&2
+	return 124
+}
+
+wait_for_terminal_responder() {
+	local phase=$1 x=$2 y=$3 deadline=$((SECONDS + 150)) tree='' sample latest='' prior='' stable_since=0
+	while ((SECONDS < deadline)); do
+		if sample=$(terminal_tree "$phase" responder-ax "$deadline" "$x" "$y"); then
+			tree=$sample
+			if has_dismiss_region <<<"$tree"; then
+				printf '%s %s responder blocked by dismiss region after terminal tap, retrying dismissal\n' "$(input_time)" "$phase" >&2
+				return 75
+			fi
+		else
+			stable_since=0
+			sleep 0.3
+			continue
+		fi
+		if latest=$(terminal_responder "$phase" "$deadline"); then
+			printf '%s %s responder evidence: %s\n' "$(input_time)" "$phase" "${latest:-no matching UIKit event}" >&2
+			if [[ $latest == *'_inputViewsForResponder: <'*'.ConfirmingTerminalView: '* ]]; then
+				# UIKit need not emit a new event when tapping an already focused terminal.
+				if ((stable_since == 0)) || [[ $latest != "$prior" ]]; then
+					stable_since=$SECONDS
+					prior=$latest
+				elif ((SECONDS - stable_since >= 6 && SECONDS < deadline)); then
+					if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-focused.ax.json"; fi
+					printf 'Herdr terminal first responder (%s): %s\n' "$phase" "$latest"
+					return 0
 				fi
 			else
-				closed=
-				if ! latest=$(terminal_responder "$deadline"); then latest=''; fi
-				if ((tap_required == 0)) && [[ $latest == *'_inputViewsForResponder: <'*'.ConfirmingTerminalView: '* ]]; then
-					# A tap on an already focused terminal need not emit a new UIKit event.
-					# Require the same responder and an unobstructed tree across a quiet window.
-					if ((stable_since == 0)) || [[ $latest != "$prior" ]]; then
-						stable_since=$SECONDS
-						prior=$latest
-					elif ((SECONDS - stable_since >= 5)); then
-						if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-focused.ax.json"; fi
-						printf 'Herdr terminal first responder (%s): %s\n' "$phase" "$latest"
-						return 0
-					fi
-				else
-					stable_since=0
-				fi
-				if ((tapped == 0 && stable_since == 0)); then
-					if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-before-tap.ax.json"; fi
-					before_focus_deadline "$deadline" axe tap --udid "$sim" -x "$x" -y "$y" || return
-					tapped=1
-					tap_required=0
-				fi
+				stable_since=0
 			fi
 		else
 			stable_since=0
@@ -123,8 +179,23 @@ focus_terminal() {
 		sleep 0.3
 	done
 	if [[ -n $diagnostics ]]; then printf '%s\n' "$tree" > "$diagnostics/$phase-focus-timeout.ax.json"; fi
-	printf 'Herdr terminal did not gain first responder (%s): %s\n' "$phase" "$latest" >&2
-	return 1
+	printf '%s %s responder deadline exhausted exit=124 (last event: %s)\n' "$(input_time)" "$phase" "$latest" >&2
+	return 124
+}
+
+focus_terminal() {
+	local phase=$1 x=130 y=260 attempt status
+	# The terminal tap can itself show the first or second keyboard tip.
+	for ((attempt=0; attempt<3; attempt++)); do
+		dismiss_toolbar_tips "$phase" "$x" "$y" || return
+		focus_operation "$phase" "terminal-tap ($x,$y)" "$((SECONDS + 30))" \
+			axe tap --udid "$sim" -x "$x" -y "$y" >&2 || return
+		wait_for_terminal_responder "$phase" "$x" "$y" && return 0
+		status=$?
+		if ((status != 75)); then return "$status"; fi
+	done
+	printf '%s %s responder remained blocked after three terminal taps exit=124\n' "$(input_time)" "$phase" >&2
+	return 124
 }
 
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
@@ -237,10 +308,10 @@ record_phase 'first worker observed' || true
 # settings, and Escape closes settings without installing integrations.
 # Without this, the first command's Return only advances onboarding.
 sleep 2
-focus_terminal onboarding 1
+focus_terminal onboarding
 printf 'key 40\nsleep 1\nkey 41\nsleep 1\n' >"$steps"
 run_batch onboarding
-focus_terminal pane-input 0
+focus_terminal pane-input
 record_phase 'onboarding keys sent' || true
 pids=()
 failed=0
