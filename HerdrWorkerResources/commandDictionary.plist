@@ -996,6 +996,13 @@
 		<string></string>
 		<string>file</string>
 	</array>
+	<key>wasmtime</key>
+	<array>
+		<string>@rpath/WasmtimeCommand.framework/WasmtimeCommand</string>
+		<string>wasmtime_main</string>
+		<string></string>
+		<string>file</string>
+	</array>
 	<key>wc</key>
 	<array>
 		<string>@rpath/text.framework/text</string>
