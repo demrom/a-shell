@@ -1,7 +1,7 @@
-diff --git i/WasmKitCommand.swift w/WasmKitCommand.swift
-index 15c9dad..de785df 100644
---- i/WasmKitCommand.swift
-+++ w/WasmKitCommand.swift
+diff --git a/WasmKitCommand.swift b/WasmKitCommand.swift
+index 15c9dad..7adade4 100644
+--- a/WasmKitCommand.swift
++++ b/WasmKitCommand.swift
 @@ -6,7 +6,7 @@
  //
  internal import WasmKit
@@ -11,16 +11,65 @@ index 15c9dad..de785df 100644
  internal import WAT
  import Foundation
  internal import SystemPackage
-@@ -78,7 +78,7 @@ final class TTYBridge {
+@@ -35,14 +35,14 @@ func convertCArguments(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePoin
+ final class TTYBridge {
+     private var raw = false
+
+-    func link(to imports: inout Imports, store: Store) {
++    func link(to imports: inout Imports, store: Store, available: Bool = true) {
+         imports.define(module: "ashell_v1", name: "tty_size",
+                        Function(store: store, parameters: [.i32], results: [.i32]) { caller, args in
+-            [.i32(UInt32(bitPattern: self.size(caller: caller, pointer: args[0].i32)))]
++            [.i32(UInt32(bitPattern: available ? self.size(caller: caller, pointer: args[0].i32) : -58))]
+         })
+         imports.define(module: "ashell_v1", name: "tty_raw",
+                        Function(store: store, parameters: [.i32], results: [.i32]) { _, args in
+-            [.i32(UInt32(bitPattern: self.setRaw(args[0].i32 != 0)))]
++            [.i32(UInt32(bitPattern: available ? self.setRaw(args[0].i32 != 0) : -58))]
+         })
+     }
+
+@@ -78,8 +78,38 @@ final class TTYBridge {
      }
  }
 
 -// Host side of ashell_v1 process_spawn and process_wait. The native runtime
 +// Host side of ashell_v1 process and descriptor imports. The native runtime
  // reserves worker PIDs until reap; this bridge limits waits to this guest.
++private final class ForkPrelude {
++    let wasi: WASIBridgeToHost
++    var aliases: [UInt32: UInt32] = [:]
++    var closed: Set<UInt32> = []
++    var admitted: pid_t?
++    var execError: Int32 = -58
++
++    init(wasi: WASIBridgeToHost) { self.wasi = wasi }
++
++    func descriptor(_ guest: UInt32) -> UInt32? {
++        let original = aliases[guest] ?? guest
++        return !closed.contains(guest) && wasi.containsProcessDescriptor(original) ? original : nil
++    }
++
++    func duplicate(_ source: UInt32, to target: UInt32) throws {
++        guard let original = descriptor(source) else { throw WASIAbi.Errno.EBADF }
++        aliases[target] = original
++        closed.remove(target)
++    }
++
++    func close(_ fd: UInt32) -> UInt32 {
++        guard descriptor(fd) != nil else { return UInt32(WASIAbi.Errno.EBADF.rawValue) }
++        aliases.removeValue(forKey: fd)
++        closed.insert(fd)
++        return 0
++    }
++}
++
++private struct ForkAdmission: Error {}
++
  private final class ProcessBridge {
      private enum ABIError: Int32, Error {
-@@ -91,7 +91,10 @@ private final class ProcessBridge {
+         case tooBig = 1, unavailable = 6, fault = 21, encoding = 25, invalid = 28, unsupported = 58
+@@ -91,7 +121,10 @@ private final class ProcessBridge {
              var key = pthread_key_t()
              let error = pthread_key_create(&key) { pointer in
                  let cleanup = Unmanaged<ThreadCleanup>.fromOpaque(pointer).takeRetainedValue()
@@ -32,7 +81,7 @@ index 15c9dad..de785df 100644
              }
              return error == 0 ? key : nil
          }()
-@@ -113,17 +116,30 @@ private final class ProcessBridge {
+@@ -113,26 +146,82 @@ private final class ProcessBridge {
          }
      }
 
@@ -50,6 +99,7 @@ index 15c9dad..de785df 100644
          self.environment = environment
      }
 
+-    func link(to imports: inout Imports, store: Store) {
 +    static func make(directory: String, environment: [String: String],
 +                     wasi: () throws -> WASIBridgeToHost) throws -> ProcessBridge {
 +        try withoutCancellation {
@@ -61,22 +111,36 @@ index 15c9dad..de785df 100644
 +        }
 +    }
 +
-     func link(to imports: inout Imports, store: Store) {
++    func link(to imports: inout Imports, store: Store, prelude: ForkPrelude? = nil) {
          imports.define(module: "ashell_v1", name: "process_spawn",
                         Function(store: store, parameters: Array(repeating: .i32, count: 10), results: [.i32]) { caller, args in
-@@ -135,12 +151,44 @@ private final class ProcessBridge {
-                 try self.wait(memory: $0, child: Int32(bitPattern: args[0].i32), flags: args[1].i32, output: args[2].i32)
-             }
+-            self.call(caller: caller) { try self.spawn(memory: $0, arguments: args.map(\.i32)) }
++            let values = self.call(caller: caller) { try self.spawn(memory: $0, arguments: args.map(\.i32), prelude: prelude) }
++            if let prelude {
++                if prelude.admitted != nil { throw ForkAdmission() }
++                if args[8].i32 & 4 != 0 { prelude.execError = Int32(bitPattern: values[0].i32) }
++            }
++            return values
          })
+         imports.define(module: "ashell_v1", name: "process_wait",
+                        Function(store: store, parameters: [.i32, .i32, .i32], results: [.i32]) { caller, args in
+             self.call(caller: caller) {
+-                try self.wait(memory: $0, child: Int32(bitPattern: args[0].i32), flags: args[1].i32, output: args[2].i32)
++                guard prelude == nil else { throw ABIError.unsupported }
++                return try self.wait(memory: $0, child: Int32(bitPattern: args[0].i32), flags: args[1].i32, output: args[2].i32)
++            }
++        })
 +        imports.define(module: "ashell_v1", name: "process_kill",
 +                       Function(store: store, parameters: [.i32, .i32], results: [.i32]) { caller, args in
 +            self.call(caller: caller) { _ in
-+                try self.kill(child: Int32(bitPattern: args[0].i32), signal: Int32(bitPattern: args[1].i32))
++                guard prelude == nil else { throw ABIError.unsupported }
++                return try self.kill(child: Int32(bitPattern: args[0].i32), signal: Int32(bitPattern: args[1].i32))
 +            }
 +        })
 +        imports.define(module: "ashell_v1", name: "process_pipe",
 +                       Function(store: store, parameters: [.i32], results: [.i32]) { caller, args in
 +            self.call(caller: caller) { memory in
++                guard prelude == nil else { throw ABIError.unsupported }
 +                let output = args[0].i32
 +                guard output != 0 else { throw ABIError.fault }
 +                try self.check(memory, offset: output, length: 8)
@@ -93,15 +157,18 @@ index 15c9dad..de785df 100644
 +            self.call(caller: caller) { _ in
 +                let source = args[0].i32, target = args[1].i32
 +                guard source <= UInt32(Int32.max), target <= UInt32(Int32.max) else { throw WASIAbi.Errno.EBADF }
++                if let prelude {
++                    try prelude.duplicate(source, to: target)
++                    return 0
++                }
 +                return try Self.withoutCancellation {
 +                    try self.wasi.duplicateProcessDescriptor(source, to: target)
 +                    return 0
 +                }
-+            }
-+        })
+             }
+         })
      }
-
-     private func call(caller: borrowing Caller, _ body: (Memory) throws -> Int32) -> [Value] {
+@@ -141,6 +230,7 @@ private final class ProcessBridge {
          guard let memory = caller.instance?.exports[memory: "memory"] else { return [.i32(UInt32(bitPattern: -21))] }
          do { return [.i32(UInt32(bitPattern: try body(memory)))] }
          catch let error as ABIError { return [.i32(UInt32(bitPattern: -error.rawValue))] }
@@ -109,15 +176,16 @@ index 15c9dad..de785df 100644
          catch { return [.i32(UInt32(bitPattern: -29))] }
      }
 
-@@ -183,11 +231,48 @@ private final class ProcessBridge {
+@@ -183,11 +273,49 @@ private final class ProcessBridge {
          }
      }
 
-+    private func childDescriptors(memory: Memory, offset: UInt32, count: Int) throws -> [UInt32] {
+-    private func spawn(memory: Memory, arguments: [UInt32]) throws -> Int32 {
++    private func childDescriptors(memory: Memory, offset: UInt32, count: Int, prelude: ForkPrelude?) throws -> [UInt32] {
 +        guard count <= 4096 else { throw ABIError.tooBig }
 +        try check(memory, offset: offset, length: count * 12)
-+        var aliases: [UInt32: UInt32] = [:]
-+        var closed: Set<UInt32> = []
++        var aliases = prelude?.aliases ?? [:]
++        var closed = prelude?.closed ?? []
 +        if count > 0 {
 +            try memory.withUnsafeBufferPointer(offset: UInt(offset), count: count * 12) { bytes in
 +                for index in 0..<count {
@@ -150,16 +218,18 @@ index 15c9dad..de785df 100644
 +        }
 +    }
 +
-     private func spawn(memory: Memory, arguments: [UInt32]) throws -> Int32 {
++    private func spawn(memory: Memory, arguments: [UInt32], prelude: ForkPrelude?) throws -> Int32 {
          let flags = arguments[8]
-         guard flags & ~3 == 0, arguments[3] != 0, flags & 2 == 0 || arguments[5] == 0 else { throw ABIError.invalid }
+-        guard flags & ~3 == 0, arguments[3] != 0, flags & 2 == 0 || arguments[5] == 0 else { throw ABIError.invalid }
 -        guard arguments[7] == 0 else { throw ABIError.unsupported }
++        guard (prelude != nil) == (flags & 4 != 0) else { throw ABIError.unsupported }
++        guard flags & ~7 == 0, arguments[3] != 0, flags & 2 == 0 || arguments[5] == 0 else { throw ABIError.invalid }
          let output = arguments[9]
 +        guard output != 0 else { throw ABIError.fault }
          try check(memory, offset: output, length: 4)
          let path = try string(memory, offset: arguments[0], length: Int(arguments[1]))
          let argv = try vector(memory, offset: arguments[2], count: Int(arguments[3]))
-@@ -209,11 +294,15 @@ private final class ProcessBridge {
+@@ -209,11 +337,15 @@ private final class ProcessBridge {
          let variables = env.map { strdup($0) }
          defer { args.forEach { free($0) }; variables.forEach { free($0) } }
          guard !args.contains(nil), !variables.contains(nil) else { return wasiError(ENOMEM) }
@@ -169,7 +239,7 @@ index 15c9dad..de785df 100644
 -                cleanup.active.append(self)
 -                threadCleanup = cleanup
 +        return try Self.withoutCancellation {
-+            let guestFDs = try childDescriptors(memory: memory, offset: arguments[6], count: Int(arguments[7]))
++            let guestFDs = try childDescriptors(memory: memory, offset: arguments[6], count: Int(arguments[7]), prelude: prelude)
 +            var hostFDs: [CInt] = []
 +            defer { hostFDs.forEach { _ = close($0) } }
 +            for (target, descriptor) in guestFDs.enumerated() {
@@ -180,12 +250,26 @@ index 15c9dad..de785df 100644
              }
              var child: pid_t = 0
              let error = (args + [nil]).withUnsafeBufferPointer { args in
-@@ -230,12 +319,13 @@ private final class ProcessBridge {
+@@ -223,23 +355,28 @@ private final class ProcessBridge {
+             }
+             if error != 0 { return wasiError(error) }
+             children.insert(child)
+-            write(child, to: memory, at: output)
++            if let prelude { prelude.admitted = child }
++            else { write(child, to: memory, at: output) }
+             return 0
+         }
+     }
 
      private func wait(memory: Memory, child: pid_t, flags: UInt32, output: UInt32) throws -> Int32 {
-         guard flags & ~1 == 0 else { throw ABIError.invalid }
-+        guard output != 0 else { throw ABIError.fault }
-         try check(memory, offset: output, length: 4)
+-        guard flags & ~1 == 0 else { throw ABIError.invalid }
+-        try check(memory, offset: output, length: 4)
++        let peek = flags == 2
++        guard peek || flags & ~1 == 0 else { throw ABIError.invalid }
++        if !peek {
++            guard output != 0 else { throw ABIError.fault }
++            try check(memory, offset: output, length: 4)
++        }
          repeat {
              let candidates = child == -1 ? children : (children.contains(child) ? [child] : [])
              if candidates.isEmpty { return wasiError(ECHILD) }
@@ -193,9 +277,26 @@ index 15c9dad..de785df 100644
 -                let (result, status, error) = withoutCancellation {
 +                let (result, status, error) = Self.withoutCancellation {
                      var status: Int32 = 0
-                     let result = ios_wait4(candidate, &status, WNOHANG, nil, nil)
+-                    let result = ios_wait4(candidate, &status, WNOHANG, nil, nil)
++                    let result = peek ? ios_peek_worker(candidate) : ios_wait4(candidate, &status, WNOHANG, nil, nil)
                      let error = result < 0 ? errno : 0
-@@ -256,7 +346,22 @@ private final class ProcessBridge {
+-                    if result > 0 || error == ECHILD || error == ESRCH { children.remove(candidate) }
++                    if (!peek && result > 0) || error == ECHILD || error == ESRCH { children.remove(candidate) }
+                     return (result, status, error)
+                 }
+                 if result < 0 {
+@@ -247,16 +384,31 @@ private final class ProcessBridge {
+                     return wasiError(error)
+                 }
+                 if result == 0 { continue }
+-                write(status, to: memory, at: output)
++                if !peek { write(status, to: memory, at: output) }
+                 return result
+             }
+             if children.isEmpty { return wasiError(ECHILD) }
+-            if flags & 1 != 0 { return 0 }
++            if peek || flags & 1 != 0 { return 0 }
+             usleep(20_000)
          } while true
      }
 
@@ -219,7 +320,7 @@ index 15c9dad..de785df 100644
          var previous: Int32 = 0
          pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, &previous)
          defer { pthread_setcancelstate(previous, nil) }
-@@ -264,7 +369,7 @@ private final class ProcessBridge {
+@@ -264,7 +416,7 @@ private final class ProcessBridge {
      }
 
      func finish() {
@@ -228,7 +329,142 @@ index 15c9dad..de785df 100644
              retireRemainingChildren()
              threadCleanup?.active.removeAll { $0 === self }
              threadCleanup = nil
-@@ -355,19 +460,18 @@ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer
+@@ -320,6 +472,134 @@ private final class ProcessBridge {
+     }
+ }
+
++private final class ForkRun {
++    private enum InvalidContinuation: Error { case rewind, unwind, bounds }
++    private static let unsupported: Int32 = -58
++    private static let maxMemory = 32 * 1024 * 1024
++    private struct Capture {
++        let data: UInt32
++        let length: UInt32
++        let stack: Value
++    }
++
++    private var capture: Capture?
++    private var result: Int32?
++    private let prelude: ForkPrelude?
++
++    init(prelude: ForkPrelude? = nil) { self.prelude = prelude }
++
++    private func fork(_ caller: borrowing Caller, data: UInt32, length: UInt32) throws -> Int32 {
++        guard let instance = caller.instance else { return Self.unsupported }
++        let exports = instance.exports
++        if let result, let capture {
++            guard capture.data == data, capture.length == length,
++                  try exports[function: "asyncify_get_state"]?().first == .i32(2),
++                  let stop = exports[function: "asyncify_stop_rewind"] else { throw InvalidContinuation.rewind }
++            try stop()
++            self.result = nil
++            self.capture = nil
++            return result
++        }
++        guard prelude == nil, capture == nil, let memory = exports[memory: "memory"], !memory.type.shared,
++              let stack = exports[global: "__stack_pointer"],
++              let start = exports[function: "asyncify_start_unwind"],
++              let state = exports[function: "asyncify_get_state"],
++              exports[function: "asyncify_stop_unwind"] != nil,
++              exports[function: "asyncify_start_rewind"] != nil,
++              exports[function: "asyncify_stop_rewind"] != nil else { return Self.unsupported }
++        guard memory.byteCount <= Self.maxMemory else { return -48 }
++        guard data != 0, data % 4 == 0, length >= 8, Int(data) + Int(length) <= memory.byteCount,
++              try state().first == .i32(0) else { return -28 }
++        memory.withUnsafeMutableBufferPointer(offset: UInt(data), count: 8) { bytes in
++            bytes.storeBytes(of: (data + 8).littleEndian, as: UInt32.self)
++            bytes.storeBytes(of: (data + length).littleEndian, toByteOffset: 4, as: UInt32.self)
++        }
++        capture = Capture(data: data, length: length, stack: stack.value)
++        try start([.i32(data)])
++        return 0 // Not observed by instrumented code while unwinding.
++    }
++
++    private func instantiate(_ module: Module, store: Store, processes: ProcessBridge, tty: TTYBridge) throws -> Instance {
++        var imports = Imports()
++        if let prelude {
++            // Only read-only WASI helpers and private fd_close are exposed in
++            // the child prologue. Owned descriptors remain on the parent bridge.
++            processes.wasi.link(to: &imports, store: store, capabilities: [.environment, .clocks, .process], stubUnlinked: true)
++            imports.define(module: "wasi_snapshot_preview1", name: "fd_close",
++                           Function(store: store, parameters: [.i32], results: [.i32]) { _, values in
++                [.i32(prelude.close(values[0].i32))]
++            })
++        } else {
++            processes.wasi.link(to: &imports, store: store)
++        }
++        tty.link(to: &imports, store: store, available: prelude == nil)
++        processes.link(to: &imports, store: store, prelude: prelude)
++        imports.define(module: "ashell_v1", name: "process_fork",
++                       Function(store: store, parameters: [.i32, .i32], results: [.i32]) { caller, args in
++            [.i32(UInt32(bitPattern: try self.fork(caller, data: args[0].i32, length: args[1].i32)))]
++        })
++        return try module.instantiate(store: store, imports: imports)
++    }
++
++    private func rewind(_ instance: Instance, saved: Capture, result: Int32, wasi: WASIBridgeToHost) throws -> UInt32 {
++        guard let stack = instance.exports[global: "__stack_pointer"],
++              let start = instance.exports[function: "asyncify_start_rewind"] else { throw InvalidContinuation.rewind }
++        capture = saved
++        self.result = result
++        try stack.assign(saved.stack)
++        try start([.i32(saved.data)])
++        return try wasi.start(instance)
++    }
++
++    func execute(_ module: Module, store: Store, processes: ProcessBridge, tty: TTYBridge) throws -> UInt32 {
++        let parent = try instantiate(module, store: store, processes: processes, tty: tty)
++        var status = try processes.wasi.start(parent)
++        while let saved = capture {
++            let exports = parent.exports
++            guard let memory = exports[memory: "memory"],
++                  try exports[function: "asyncify_get_state"]?().first == .i32(1),
++                  let stop = exports[function: "asyncify_stop_unwind"] else { throw InvalidContinuation.unwind }
++            try stop()
++            let valid = memory.withUnsafeBufferPointer(offset: UInt(saved.data), count: 8) { data in
++                let cursor = UInt32(littleEndian: data.loadUnaligned(as: UInt32.self))
++                let limit = UInt32(littleEndian: data.loadUnaligned(fromByteOffset: 4, as: UInt32.self))
++                return cursor >= saved.data + 8 && cursor <= limit && limit == saved.data + saved.length
++            }
++            guard valid else { throw InvalidContinuation.bounds }
++            // Validate the allocation bound again after executing the guest's unwind exports.
++            let result = memory.byteCount <= Self.maxMemory
++                ? executeChild(module, store: store, processes: processes, tty: tty, saved: saved, memory: memory)
++                : -48
++            status = try rewind(parent, saved: saved, result: result, wasi: processes.wasi)
++        }
++        return status
++    }
++
++    private func executeChild(_ module: Module, store: Store, processes: ProcessBridge, tty: TTYBridge,
++                              saved: Capture, memory: Memory) -> Int32 {
++        let prelude = ForkPrelude(wasi: processes.wasi)
++        let run = ForkRun(prelude: prelude)
++        do {
++            let child = try run.instantiate(module, store: Store(engine: store.engine), processes: processes, tty: tty)
++            guard let target = child.exports[memory: "memory"] else { return Self.unsupported }
++            if target.byteCount < memory.byteCount {
++                let pages = UInt32((memory.byteCount - target.byteCount) / 65536)
++                try child.exports[function: "ashell_fork_grow"]?([.i32(pages)])
++            }
++            guard target.byteCount == memory.byteCount else { return -48 }
++            target.withUnsafeMutableBufferPointer(offset: 0, count: target.byteCount) { destination in
++                memory.withUnsafeBufferPointer(offset: 0, count: memory.byteCount) { source in
++                    destination.copyMemory(from: source)
++                }
++            }
++            _ = try run.rewind(child, saved: saved, result: 0, wasi: processes.wasi)
++        } catch {
++            // The throw stops the prelude; worker ownership does not depend on the engine's error type.
++        }
++        return prelude.admitted ?? prelude.execError
++    }
++}
++
+ @_cdecl("wasmkit")
+ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>?) -> Int32 {
+     guard let args = convertCArguments(argc: argc, argv: argv) else {
+@@ -355,29 +635,19 @@ public func wasmkit(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer
              let currentDirectory = FileManager().currentDirectoryPath
              let tty = TTYBridge()
              defer { tty.restore() }
@@ -245,6 +481,16 @@ index 15c9dad..de785df 100644
 -            // Start the WASI command-line application and close the bridge.
 -            let exitCode = try wasi.runAndClose { wasi in
 -                defer { processes.finish() }
+-                // Create engine and store
+-                let engine = Engine()
+-                let store = Store(engine: engine)
+-                // Instantiate a parsed module importing WASI
+-                var imports = Imports()
+-                wasi.link(to: &imports, store: store)
+-                tty.link(to: &imports, store: store)
+-                processes.link(to: &imports, store: store)
+-                let instance = try module.instantiate(store: store, imports: imports)
+-                return try wasi.start(instance)
 +            let processes = try ProcessBridge.make(directory: currentDirectory, environment: environment) {
 +                try WASIBridgeToHost(args: arguments,
 +                                     environment: environment,
@@ -256,7 +502,8 @@ index 15c9dad..de785df 100644
 +            }
 +            // Keep TLS registration until runAndClose has released the descriptor table.
 +            defer { processes.finish() }
-+            let exitCode = try processes.wasi.runAndClose { wasi in
-                 // Create engine and store
-                 let engine = Engine()
-                 let store = Store(engine: engine)
++            let exitCode = try processes.wasi.runAndClose { _ in
++                try ForkRun().execute(module, store: Store(engine: Engine()), processes: processes, tty: tty)
+             }
+             if (exitCode != 0) {
+                 // fputs("wasmkit: \(String(cString: strerror(Int32(exitCode))), default: "unknown error \(exitCode)")\n", thread_stdout)

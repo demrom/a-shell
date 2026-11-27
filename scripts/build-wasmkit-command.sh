@@ -64,11 +64,11 @@ fetch "https://codeload.github.com/holzschu/WasmKit/tar.gz/$engine" \
 # One-off CI preview: use the fork's artifact while it is retained. The
 # anonymous mirror avoids configuring a cross-repository Actions credential.
 # Verify both the Actions archive and the selected XCFramework member.
-runtime_archive="$downloads/ios_system-15231931433.zip"
-fetch https://nightly.link/demrom/ios_system/actions/artifacts/15231931433.zip \
-  c2c3f1a0bb3f2f256448cadd0a93d4d3f49e240ea218ba929908fa58d29b1bff "$runtime_archive"
+runtime_archive="$downloads/ios_system-15236108501.zip"
+fetch https://nightly.link/demrom/ios_system/actions/artifacts/15236108501.zip \
+  f0ade018efb7d0d69469d3b21aed355e236d6e55e88a3f0d87a5ae56ed3fdb13 "$runtime_archive"
 unzip -p "$runtime_archive" .build/ios_system.xcframework.zip > "$stage/ios_system.xcframework.zip"
-printf '%s  %s\n' 7a0e3cf02cd858a01c08c7d06b6f97fe0d6ed4b5102661f5a6d9b51eed62b1ef \
+printf '%s  %s\n' 478e445e3bc552ff3ab2154b75f0d7509ba8808a6a15bebd2acb4da77be10171 \
   "$stage/ios_system.xcframework.zip" | shasum -a 256 -c -
 source="$stage/source"
 mkdir -p "$source/WasmKit"
@@ -130,7 +130,8 @@ verify_slice() {
     test "$(awk '$1 == "platform" { print $2 }' <<<"$info")" = "$platform"
     test "$(awk '$1 == "minos" { print $2 }' <<<"$info")" = "$minimum"
     xcrun nm -arch "$arch" -gU "$binary" | awk '$NF == "_wasmkit" { found = 1 } END { exit !found }'
-    xcrun nm -arch "$arch" -u "$binary" | awk '$NF == "_ios_kill_worker" { found = 1 } END { exit !found }'
+    xcrun nm -arch "$arch" -u "$binary" |
+      awk '$NF == "_ios_kill_worker" { kill = 1 } $NF == "_ios_peek_worker" { peek = 1 } END { exit !(kill && peek) }'
     xcrun otool -arch "$arch" -L "$binary" |
       awk '$1 == "@rpath/ios_system.framework/ios_system" { found = 1 } END { exit !found }'
     printf '%s %s %s minOS=%s\n' "$slice" "$arch" "$platform" "$minimum" | tee -a "$dist/slices.txt"
@@ -165,6 +166,9 @@ if "$smoke"; then
   xxd -r -p "$root/tests/wasmkit/kill-unowned.hex" "$app/kill-unowned.wasm"
   printf 'cdfc9f70afafd7c3bd1a9e64452ed9a445b7e9021f945ff5e1c4a8292ae2c13f  %s\n' \
     "$app/kill-unowned.wasm" | shasum -a 256 -c -
+  xxd -r -p "$root/tests/wasmkit/peek-fork.hex" "$app/peek-fork.wasm"
+  printf '3ecc8826aac4d6e694d5af57049563dc45ef29b30c937f0564befb3d1b42a245  %s\n' \
+    "$app/peek-fork.wasm" | shasum -a 256 -c -
   cp "$root/tests/wasmkit/Info.plist" "$root/tests/wasmkit/commandDictionary.plist" "$app/"
   codesign --force --sign - "$frameworks/$name.framework"
   codesign --force --sign - "$frameworks/ios_system.framework"
@@ -185,8 +189,9 @@ if "$smoke"; then
   tee <"$dist/hello.stdout"
   tee <"$dist/hello.stderr" >&2
   test "$status" = 0
-  diff -u <(printf 'Hello from WASI!\nprocess-pipe-ok\nprocess-kill-ok\n') "$dist/hello.stdout"
+  diff -u <(printf 'Hello from WASI!\nprocess-pipe-ok\nprocess-kill-ok\nprocess-peek-fork-ok\n') "$dist/hello.stdout"
   grep -Fxq 'wasmkit hello.wasm: status=0' "$dist/hello.stderr"
   grep -Fxq 'wasmkit pipe.wasm: status=0' "$dist/hello.stderr"
   grep -Fxq 'wasmkit kill-unowned.wasm: status=0' "$dist/hello.stderr"
+  grep -Fxq 'wasmkit peek-fork.wasm: status=0' "$dist/hello.stderr"
 fi
