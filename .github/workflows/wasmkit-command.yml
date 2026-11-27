@@ -1,15 +1,6 @@
 name: WasmKitCommand framework
+# This CI-only ref uses a short-lived runtime Actions artifact, not a release.
 on:
-  pull_request:
-    paths:
-      - 'scripts/build-wasmkit-command.sh'
-      - 'tests/wasmkit/**'
-      - '.github/workflows/wasmkit-command.yml'
-  push:
-    paths:
-      - 'scripts/build-wasmkit-command.sh'
-      - 'tests/wasmkit/**'
-      - '.github/workflows/wasmkit-command.yml'
   workflow_dispatch:
 
 permissions:
@@ -17,6 +8,7 @@ permissions:
 
 jobs:
   build:
+    if: github.repository == 'demrom/a-shell' && github.ref == 'refs/heads/ci/wasmkit-process-api'
     # The hosted arm64 pool cancelled this job before checkout.
     runs-on: macos-26-intel
     timeout-minutes: 35

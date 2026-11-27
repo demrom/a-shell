@@ -40,7 +40,7 @@ cleanup() {
 trap cleanup EXIT
 
 # The wrapper's WasmKit submodule commit and its workspace Package.resolved are pinned together.
-wrapper=7236ffc031aaae384ef2257a6c2b9213c4e119ec
+wrapper=60a6f6477f13c281aea9d1379c81f41d553dcefe
 engine=24700702a854d23b65af63780366c89e8b4996f6
 minimum=18.0
 
@@ -57,18 +57,24 @@ fetch() {
 
 xcodebuild -version
 xcrun swiftc --version
-fetch "https://codeload.github.com/holzschu/WasmKitCommand/tar.gz/$wrapper" \
-  e581ecff582a17f759d9fa9187ee0960d94ae8011a1089f18cb7ad86c59c3971 "$downloads/WasmKitCommand-$wrapper.tar.gz"
+fetch "https://codeload.github.com/demrom/WasmKitCommand/tar.gz/$wrapper" \
+  5db9a9be38c24b022cf4866bfbd7d17c55686ec9a694fc9caeea863471a1ceea "$downloads/WasmKitCommand-$wrapper.tar.gz"
 fetch "https://codeload.github.com/holzschu/WasmKit/tar.gz/$engine" \
   cbd094b4e188a25e61bad157e8b7642473c59017e334fb109e53a454d39c5cd7 "$downloads/WasmKit-$engine.tar.gz"
-# v3.0.5 lacks ios_startInteractive, used by the command's TTY bridge.
-fetch https://github.com/holzschu/ios_system/releases/download/v3.0.6/ios_system.xcframework.zip \
-  c9c6dc4cde45cc271ccc8bd0553ce4d3149eced1f0ee3d9e0ce01885d93526e6 "$downloads/ios_system-v3.0.6.xcframework.zip"
+# One-off CI preview: use the fork's artifact while it is retained. The
+# anonymous mirror avoids configuring a cross-repository Actions credential.
+# Verify both the Actions archive and the selected XCFramework member.
+runtime_archive="$downloads/ios_system-15214330579.zip"
+fetch https://nightly.link/demrom/ios_system/actions/artifacts/15214330579.zip \
+  a3253a91e48f53fdf75e041f139904a6c8b72155179dd629a9eb6e2e8d558800 "$runtime_archive"
+unzip -p "$runtime_archive" .build/ios_system.xcframework.zip > "$stage/ios_system.xcframework.zip"
+printf '%s  %s\n' 3faa0572de58c76181bf20235e21e8ae02505e0585040a3551911a692edc0625 \
+  "$stage/ios_system.xcframework.zip" | shasum -a 256 -c -
 source="$stage/source"
 mkdir -p "$source/WasmKit"
 tar -xzf "$downloads/WasmKitCommand-$wrapper.tar.gz" --strip-components 1 -C "$source"
 tar -xzf "$downloads/WasmKit-$engine.tar.gz" --strip-components 1 -C "$source/WasmKit"
-unzip -q "$downloads/ios_system-v3.0.6.xcframework.zip" -d "$source"
+unzip -q "$stage/ios_system.xcframework.zip" -d "$source"
 
 name=WasmKitCommand
 for sdk in iphoneos iphonesimulator; do
