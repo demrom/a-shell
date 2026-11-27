@@ -23,7 +23,10 @@ if [ -n "$confirm" ]; then
         *) printf 'The unattended confirmation requires an English Simulator.\n' >&2; exit 64 ;;
     esac
     app=$(xcrun simctl get_app_container "$udid" "$bundle" app)
-    name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Info.plist")
+    # The full app supplies only CFBundleName.
+    if ! name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleDisplayName' "$app/Info.plist" 2>/dev/null) || [ -z "$name" ]; then
+        name=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleName' "$app/Info.plist")
+    fi
     prompt='Open in “'"$name"'”?'
 fi
 container=$(xcrun simctl get_app_container "$udid" "$bundle" data)
