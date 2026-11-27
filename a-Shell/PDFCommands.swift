@@ -108,9 +108,9 @@ private enum PDFCommand: String {
     }
 
     private static func write(_ text: String, to stream: UnsafeMutablePointer<FILE>) throws {
-        let bytes = text.utf8CString
-        let written = bytes.withUnsafeBufferPointer { fwrite($0.baseAddress, 1, $0.count - 1, stream) }
-        guard written == bytes.count - 1, fflush(stream) == 0 else { throw PDFCommandError("cannot write output") }
+        let bytes = Array(text.utf8)
+        let written = bytes.withUnsafeBufferPointer { fwrite($0.baseAddress, 1, $0.count, stream) }
+        guard written == bytes.count, fflush(stream) == 0 else { throw PDFCommandError("cannot write output") }
     }
 
     private static func extract(_ document: PDFDocument, pages: ClosedRange<Int>, layout: Bool, output: String) throws {
