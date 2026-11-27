@@ -1,0 +1,336 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -1,4 +1,5 @@
+ [package]
++autobins = false
+ name = "monolith"
+ version = "2.12.0"
+ authors = [
+@@ -84,18 +85,9 @@
+ 
+ [lib]
+ name = "monolith"
++crate-type = ["cdylib"]
+ path = "src/lib.rs"
+ 
+-[[bin]]
+-name = "monolith"
+-path = "src/main.rs"
+-required-features = ["cli"]
+-
+-[[bin]]
+-name = "monolith-gui"
+-path = "src/gui.rs"
+-required-features = ["gui"]
+-
+ [profile.release]
+ opt-level = 3
+ lto = true
+--- a/src/core.rs
++++ b/src/core.rs
+@@ -1,8 +1,7 @@
+-use std::env;
+ use std::error::Error;
+ use std::fmt;
+ use std::fs;
+-use std::io::{self, IsTerminal, Write};
++use std::io::Write;
+ use std::path::Path;
+ 
+ use chrono::{SecondsFormat, Utc};
+@@ -78,8 +77,6 @@
+     pub user_agent: Option<String>,
+ }
+ 
+-const ANSI_COLOR_RED: &str = "\x1b[31m";
+-const ANSI_COLOR_RESET: &str = "\x1b[0m";
+ // All known non-"text/..." plaintext media types
+ const PLAINTEXT_MEDIA_TYPES: &[&str] = &[
+     "application/javascript",          // .js
+@@ -609,36 +606,9 @@
+ }
+ 
+ pub fn print_error_message(text: &str) {
+-    let stderr = io::stderr();
+-    let mut handle = stderr.lock();
+-
+-    const ENV_VAR_NO_COLOR: &str = "NO_COLOR";
+-    const ENV_VAR_TERM: &str = "TERM";
+-
+-    let mut no_color = env::var_os(ENV_VAR_NO_COLOR).is_some() || !std::io::stderr().is_terminal();
+-    if let Some(term) = env::var_os(ENV_VAR_TERM) {
+-        if term == "dumb" {
+-            no_color = true;
+-        }
+-    }
+-
+-    if handle
+-        .write_all(
+-            format!(
+-                "{}{}{}\n",
+-                if no_color { "" } else { ANSI_COLOR_RED },
+-                &text,
+-                if no_color { "" } else { ANSI_COLOR_RESET },
+-            )
+-            .as_bytes(),
+-        )
+-        .is_ok()
+-    {}
++    print_info_message(text);
+ }
+ 
+ pub fn print_info_message(text: &str) {
+-    let stderr = io::stderr();
+-    let mut handle = stderr.lock();
+-
+-    if handle.write_all(format!("{}\n", &text).as_bytes()).is_ok() {}
++    let _ = writeln!(crate::host_io::Output::Stderr, "{text}");
+ }
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,7 @@
++#[path = "main.rs"]
++mod command;
++mod host_io;
++
+ pub mod cache;
+ pub mod cookies;
+ pub mod core;
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -1,18 +1,21 @@
++use std::ffi::{CStr, OsString, c_char};
+ use std::fs;
+-use std::io::{self, Error as IoError, Read, Write};
++use std::io::{self, Error as IoError, Read, Write};
++use std::os::unix::ffi::OsStringExt;
+ use std::path::Path;
+-use std::process;
++
++use crate::host_io::{Input, Output as HostOutput};
+ 
+ use clap::Parser;
+ use tempfile::{Builder, NamedTempFile};
+ 
+-use monolith::cache::Cache;
+-use monolith::cookies::{Cookie, parse_cookie_file_contents};
+-use monolith::core::{
++use crate::cache::Cache;
++use crate::cookies::{Cookie, parse_cookie_file_contents};
++use crate::core::{
+     MonolithOptions, MonolithOutputFormat, create_monolithic_document,
+     create_monolithic_document_from_data, format_output_path, print_error_message,
+ };
+-use monolith::session::Session;
++use crate::session::Session;
+ 
+ const ASCII: &str = " \
+  _____    _____________   __________     ___________________    ___
+@@ -130,7 +133,7 @@
+ }
+ 
+ pub enum Output {
+-    Stdout(io::Stdout),
++    Stdout(HostOutput),
+     File(fs::File),
+ }
+ 
+@@ -142,7 +145,7 @@
+         create_dirs: bool,
+     ) -> Result<Output, IoError> {
+         if destination.is_empty() || destination.eq("-") {
+-            Ok(Output::Stdout(io::stdout()))
++            Ok(Output::Stdout(HostOutput::Stdout))
+         } else {
+             let final_destination = format_output_path(destination, document_title, format);
+ 
+@@ -185,19 +188,44 @@
+     }
+ }
+ 
+-pub fn read_stdin() -> Vec<u8> {
+-    let mut buffer: Vec<u8> = vec![];
+-
+-    match io::stdin().lock().read_to_end(&mut buffer) {
+-        Ok(_) => buffer,
+-        Err(_) => buffer,
++// ios_system owns argv and the streams for this synchronous call.
++#[unsafe(no_mangle)]
++pub unsafe extern "C" fn monolith_ios_main(argc: i32, argv: *const *const c_char) -> i32 {
++    let status = std::panic::catch_unwind(|| {
++        let args = (0..argc).map(|i| unsafe {
++            OsString::from_vec(CStr::from_ptr(*argv.add(i as usize)).to_bytes().to_vec())
++        });
++        match Cli::try_parse_from(args) {
++            Ok(cli) => run(cli),
++            Err(error) => {
++                let mut stream = if error.use_stderr() {
++                    HostOutput::Stderr
++                } else {
++                    HostOutput::Stdout
++                };
++                if write!(stream, "{error}").is_err() {
++                    1
++                } else {
++                    error.exit_code()
++                }
++            }
++        }
++    })
++    .unwrap_or_else(|_| {
++        print_error_message("monolith: unexpected failure");
++        1
++    });
++    let output = HostOutput::Stdout.flush();
++    let errors = HostOutput::Stderr.flush();
++    if output.is_err() || errors.is_err() {
++        1
++    } else {
++        status
+     }
+ }
+ 
+-fn main() {
+-    let cli = Cli::parse();
++fn run(cli: Cli) -> i32 {
+     let cookie_file_path;
+-    let mut exit_code = 0;
+     let mut options: MonolithOptions = MonolithOptions::default();
+     let destination;
+ 
+@@ -225,7 +253,8 @@
+         options.no_video = cli.no_video;
+         options.silent = cli.quiet;
+         options.timeout = cli.timeout.unwrap_or(DEFAULT_NETWORK_TIMEOUT);
+-        options.threads = 30;
++        // The auxiliary Rayon pool does not inherit ios_system command streams.
++        options.threads = 1;
+         options.unwrap_noscript = cli.unwrap_noscript;
+         if cli.user_agent.is_none() {
+             options.user_agent = Some(DEFAULT_USER_AGENT.to_string());
+@@ -274,7 +303,7 @@
+                             opt_cookie_file
+                         ));
+                     }
+-                    process::exit(1);
++                    return 1;
+                 }
+             },
+             Err(_) => {
+@@ -284,7 +313,7 @@
+                         opt_cookie_file
+                     ));
+                 }
+-                process::exit(1);
++                return 1;
+             }
+         }
+     }
+@@ -294,79 +323,37 @@
+     let silent = options.silent;
+     let session: Session = Session::new(cache, cookies, options);
+ 
+-    // Retrieve target from source and output result
+-    if cli.target == "-" {
+-        // Read input from pipe (STDIN)
+-        let data: Vec<u8> = read_stdin();
+-
+-        match create_monolithic_document_from_data(session, data, None, None) {
+-            Ok((result, title)) => {
+-                // Define output
+-                match Output::new(
+-                    &destination.unwrap_or(String::new()),
+-                    &title.unwrap_or_default(),
+-                    output_format,
+-                    cli.create_dirs,
+-                ) {
+-                    Ok(mut output) => {
+-                        // Write result into STDOUT or file
+-                        output.write(&result).expect("could not write output");
+-                    }
+-                    Err(error) => {
+-                        if !silent {
+-                            print_error_message(&format!("Error: {}", error));
+-                        }
+-
+-                        exit_code = 1;
+-                    }
+-                }
+-            }
+-            Err(error) => {
+-                if !silent {
+-                    print_error_message(&format!("Error: {}", error));
+-                }
+-
+-                exit_code = 1;
+-            }
++    let document = if cli.target == "-" {
++        let mut data = Vec::new();
++        if let Err(error) = Input.read_to_end(&mut data) {
++            print_error_message(&format!("monolith: {error}"));
++            return 1;
+         }
++        create_monolithic_document_from_data(session, data, None, None)
+     } else {
+-        match create_monolithic_document(session, cli.target) {
+-            Ok((result, title)) => {
+-                // Define output
+-                match Output::new(
+-                    &destination.unwrap_or(String::new()),
+-                    &title.unwrap_or_default(),
+-                    output_format,
+-                    cli.create_dirs,
+-                ) {
+-                    Ok(mut output) => {
+-                        // Write result into STDOUT or file
+-                        output.write(&result).expect("could not write output");
+-                    }
+-                    Err(error) => {
+-                        if !silent {
+-                            print_error_message(&format!("Error: {}", error));
+-                        }
+-
+-                        exit_code = 1;
+-                    }
+-                }
+-            }
+-            Err(error) => {
+-                if !silent {
+-                    print_error_message(&format!("Error: {}", error));
+-                }
+-
+-                exit_code = 1;
++        create_monolithic_document(session, cli.target)
++    };
++    let (result, title) = match document {
++        Ok(document) => document,
++        Err(error) => {
++            if !silent {
++                print_error_message(&format!("Error: {error}"));
+             }
++            return 1;
+         }
++    };
++    let written = Output::new(
++        destination.as_deref().unwrap_or_default(),
++        title.as_deref().unwrap_or_default(),
++        output_format,
++        cli.create_dirs,
++    )
++    .and_then(|mut output| output.write(&result));
++    if let Err(error) = written {
++        if !silent {
++            print_error_message(&format!("Error: {error}"));
++        }
++        return 1;
+     }
+-
+-    // TODO: bring this back
+-    // Clean up (shred database file)
+-    //cache.unwrap().destroy_database_file();
+-
+-    if exit_code > 0 {
+-        process::exit(exit_code);
+-    }
++    0
+ }
