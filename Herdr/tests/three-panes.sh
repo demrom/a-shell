@@ -17,14 +17,41 @@ receipts=$(mktemp -d "$data/Documents/herdr-ui.XXXXXX")
 cp "$fixtures/native-cpu.awk" "$fixtures/native-cpu-pane.sh" "$fixtures/native-interrupt-pane.sh" "$receipts/"
 mkdir "$receipts/"{a,b,c}-cpu
 steps=$(mktemp)
+diagnostics=${HERDR_TEST_LOG_DIR:-}
+started=$(date '+%Y-%m-%d %H:%M:%S')
+if [[ -n $diagnostics ]]; then mkdir -p "$diagnostics"; fi
+
+record_phase() {
+	if [[ -n $diagnostics ]]; then
+		{
+			printf '%s %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$1"
+			ps -axo pid=,comm= | awk -v prefix="$app/Extensions/ShellWorker" 'index($0, prefix)'
+		} >> "$diagnostics/phases.log"
+	fi
+}
+
 # Invoked by the EXIT trap, before the disposable Simulator is deleted.
 # shellcheck disable=SC2329
 finish() {
-	local status=$? name pane
+	local status=$? name pane file log_index=0
+	local predicate='process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")'
+	if [[ -n $diagnostics ]]; then
+		record_phase "fixture exit $status" || true
+		cp -R "$receipts" "$diagnostics/fixtures" || true
+		while IFS= read -r -d '' file; do
+			log_index=$((log_index + 1))
+			cp "$file" "$diagnostics/$log_index-${file##*/}" || true
+		done < <(find "$data" -type f \( -name herdr-client.log -o -name herdr.log \) -print0)
+		xcrun simctl spawn "$sim" log show --start "$started" --style compact \
+			--predicate "$predicate" > "$diagnostics/worker-system.log" 2>&1 || true
+	fi
 	if [[ $status != 0 ]]; then
-		xcrun simctl spawn "$sim" log show --last 5m --style compact \
-			--predicate 'process BEGINSWITH "ShellWorker" AND (composedMessage CONTAINS "Documents capability" OR composedMessage CONTAINS "columns" OR composedMessage CONTAINS "Terminating")' \
-			| tail -25 >&2 || true
+		if [[ -n $diagnostics ]]; then
+			tail -25 "$diagnostics/worker-system.log" >&2 || true
+		else
+			xcrun simctl spawn "$sim" log show --last 5m --style compact \
+				--predicate "$predicate" | tail -25 >&2 || true
+		fi
 		for name in a a-after-idle b c eof.out eof.status eof.worker eof.next interrupt.ready interrupt.out interrupt.returned interrupt.next detached reentry; do
 			if [[ -f $receipts/$name ]]; then
 				printf 'receipt %s:\n' "$name" >&2
@@ -64,6 +91,7 @@ wait_output() {
 		sleep 0.1
 	done
 	echo "missing or empty receipt: $1" >&2
+	record_phase "missing or empty receipt ${1##*/}" || true
 	# Record the active UI while the missing command is still on screen.
 	axe describe-ui --udid "$sim" --minimal-keys |
 		jq -c '[.. | objects | select(.AXLabel? != null) | {type, AXLabel, AXUniqueId}] | .[:20]' >&2 || true
@@ -77,6 +105,7 @@ if [[ ${4:-} == --confirm-open ]]; then
 fi
 launch=$(xcrun simctl launch "$sim" "$bundle")
 host_pid=${launch##*: }
+record_phase "start Herdr from host $host_pid" || true
 xcrun simctl openurl "$sim" "$scheme:herdr"
 # A newly booted Simulator can take longer than a fixed delay to launch the
 # first extension. Do not send pane input until a worker is live.
@@ -89,11 +118,13 @@ if [[ $attempt == 300 ]]; then
 	echo 'Herdr did not keep the first pane worker running' >&2
 	exit 1
 fi
+record_phase 'first worker observed' || true
 # Fresh Herdr opens its welcome dialog; Return continues to optional agent
 # settings, and Escape closes settings without installing integrations.
 # Without this, the first command's Return only advances onboarding.
 printf 'sleep 2\ntap -x 130 -y 260\nsleep 1\nkey 40\nsleep 1\nkey 41\nsleep 1\n' >"$steps"
 axe batch --udid "$sim" --file "$steps" >/dev/null
+record_phase 'onboarding keys sent' || true
 pids=()
 failed=0
 for pane in a b c; do
@@ -236,6 +267,7 @@ if [ "$failed" -eq 0 ]; then
 fi
 
 # Leave the real shell usable and prove same-process command re-entry.
+record_phase 'send detach' || true
 printf 'key-combo --modifiers 224 --key 5\nsleep 0.4\ntype q\nsleep 3\n' >"$steps"
 # Worker shells set ASHELL_WORKER_PID; a version command via URL alone could
 # succeed even if the terminal never left the attached client.
