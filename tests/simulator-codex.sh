@@ -36,7 +36,8 @@ transport)
     done
     base=$(< "$work/responses/base-url.txt")
     printf 'model = "ci-responses-fixture"\nmodel_provider = "fixture"\napproval_policy = "never"\nsandbox_mode = "danger-full-access"\n[model_providers.fixture]\nname = "Loopback test fixture"\nbase_url = "%s"\nwire_api = "responses"\nrequires_openai_auth = false\n' "$base" > "$work/home/config.toml"
-    printf '%s\n' "codex exec --skip-git-repo-check 'Run the fixture and report its result'" > "$work/run.sh"
+    # The app keeps its stdin pipe open. The fixture prompt is already in argv.
+    printf '%s\n' "codex exec --skip-git-repo-check 'Run the fixture and report its result' </dev/null" > "$work/run.sh"
     ;;
 *) printf 'Unknown Codex test mode: %s\n' "$mode" >&2; exit 2 ;;
 esac
