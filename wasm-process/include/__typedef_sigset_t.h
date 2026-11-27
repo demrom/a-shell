@@ -3,7 +3,7 @@
 
 // WASI SDK 34 uses a one-byte placeholder. Define the overlay type at the
 // same SDK seam so poll.h and sys/select.h agree in either include order.
-#include <stdint.h>
-typedef uint64_t sigset_t;
+// Do not include stdint.h: a replacement can re-enter sys/select.h here.
+typedef __UINT64_TYPE__ sigset_t;
 
 #endif
