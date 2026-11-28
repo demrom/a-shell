@@ -63,6 +63,10 @@ jobs:
           product=".build/app/$SCHEME-simulator/Build/Products/Debug-iphonesimulator/$SCHEME.app"
           app="$RUNNER_TEMP/$SCHEME.app"
           ditto --arch arm64 "$product" "$app"
+          if [ "$SCHEME" = a-Shell-mini ]; then
+            bash ci/check-simulator-worker-plists.sh repair "$app"
+            bash ci/check-simulator-worker-plists.sh check "$app"
+          fi
           # Concurrent Simulator builds share the host loopback port namespace.
           /usr/libexec/PlistBuddy -c 'Set :WasmServerPort 18334' "$app/Info.plist"
           # Startup needs the shared container even on Simulator.
