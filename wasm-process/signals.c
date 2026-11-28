@@ -84,14 +84,19 @@ void ashell_signal_watch_child(int32_t requested, int32_t result, ashell_wait_fu
     }
 }
 
-static int collect_signals(void) {
-    int alarm_error = collect_alarm() < 0 ? errno : 0;
+static int collect_child(void) {
     if (watched_child) {
         int32_t result = peek_child(watched_child, ASHELL_WAIT_PEEK, NULL);
         if (result > 0) pending |= ASHELL_SIGNAL_BIT(SIGCHLD);
         if (result != 0) watched_child = 0;
         if (result < 0 && result != -ECHILD && result != -EINVAL && result != -ENOTSUP) return failure(-result);
     }
+    return 0;
+}
+
+static int collect_signals(void) {
+    int alarm_error = collect_alarm() < 0 ? errno : 0;
+    if (collect_child() < 0) return -1;
     return alarm_error ? failure(alarm_error) : 0;
 }
 
@@ -176,9 +181,13 @@ int sigsuspend(const sigset_t *temporary) {
     mask = *temporary & ~ASHELL_UNBLOCKABLE;
     int error;
     for (;;) {
-        int collection_error = collect_signals() < 0 ? errno : 0;
+        // A pending signal already interrupts this suspend. Don't disarm an
+        // independent child watch or lose its error by polling unnecessarily.
+        int alarm_error = collect_alarm() < 0 ? errno : 0;
         if (dispatch()) { error = EINTR; break; }
-        if (collection_error) { error = collection_error; break; }
+        int child_error = collect_child() < 0 ? errno : 0;
+        if (dispatch()) { error = EINTR; break; }
+        if (child_error || alarm_error) { error = child_error ? child_error : alarm_error; break; }
         int alarm_can_wake = deadline && !(mask & ASHELL_SIGNAL_BIT(SIGALRM));
         int child_can_wake = watched_child && !(mask & ASHELL_SIGNAL_BIT(SIGCHLD));
         if (!alarm_can_wake && !child_can_wake) { error = ENOTSUP; break; }
