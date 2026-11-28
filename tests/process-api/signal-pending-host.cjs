@@ -1,4 +1,4 @@
-// Run the public guest with Preview 1 and an older worker host that rejects PEEK.
+// Run the public guest with Preview 1 and a broker whose PEEK fails.
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const { WASI } = require('node:wasi');
@@ -15,7 +15,7 @@ const instance = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync
         },
         process_wait(pid, flags) {
             assert.equal(pid, 23);
-            if (flags === 2) { peeks++; return -28; } // WASI EINVAL: unknown flag.
+            if (flags === 2) { peeks++; return -29; } // WASI EIO.
             if (flags === 1) { assert.equal(done, false); return 0; }
             assert.equal(done, true);
             return 23;
@@ -29,5 +29,5 @@ const instance = new WebAssembly.Instance(new WebAssembly.Module(fs.readFileSync
     },
 });
 const status = wasi.start(instance);
-assert.equal(peeks, status === 94 ? 1 : 2, `guest status=${status}`);
+assert.equal(peeks, status === 98 ? 1 : 2, `guest status=${status}`);
 process.exitCode = status;
