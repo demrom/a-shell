@@ -852,6 +852,10 @@ final class Relay: ObservableObject {
         ios_settty(nil)
         ios_setDirectoryURL(URL(fileURLWithPath: cwd))
         let pid = ios_fork()
+        guard pid > 0 else {
+            close(outputPipe[0]); close(errorPipe[0])
+            return .init(stdout: "", stderr: "Cannot start command: process table full\n", status: -1)
+        }
         let limit = 8 * 1024 * 1024
         let monitorLock = NSLock()
         var running = true

@@ -190,6 +190,11 @@ class ExecuteCommandIntentHandler: INExtension, ExecuteCommandIntentHandling
                 FileManager.default.changeCurrentDirectoryPath(String(cString: sessionDirectory))
             }
             let pid = ios_fork()
+            guard pid > 0 else {
+                fputs("Cannot start command: process table full\n", stdout_file)
+                returnVal = 1
+                break
+            }
             returnVal = ios_system(command)
             fflush(thread_stdout)
             ios_waitpid(pid)

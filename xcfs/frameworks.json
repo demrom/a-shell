@@ -8,10 +8,6 @@
       "url": "https://github.com/holzschu/openssl-apple/releases/download/v1.1.1w/openssl-dynamic.xcframework.zip",
       "sha256": "329e8317cf9bee8e138da5d032330a7a1bd2473cf44c9c083cb2f0636abb8b80"
     },
-    "ios_system": {
-      "url": "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/ios_system.xcframework.zip",
-      "sha256": "bac0689c792901cbf410899162c06ab22a950b032adfb5f94b5c3ab6a661e883"
-    },
     "awk": {
       "url": "https://github.com/demrom/ios_system/releases/download/ios-system-preview-2c560334ecca/awk.xcframework.zip",
       "sha256": "d797f840ca1f749273a4dc966b99c1b822c3dc9b513e43d75f7e062dd1fd5d7d"
@@ -299,6 +295,15 @@
       "revision": "7030e754c39c0404348987e3d6419af18ce31038",
       "frameworks": {
         "lg2": "lg2.xcframework.zip"
+      }
+    },
+    "ios_system-process-api": {
+      "url": "https://nightly.link/demrom/ios_system/actions/artifacts/15236108501.zip",
+      "sha256": "f0ade018efb7d0d69469d3b21aed355e236d6e55e88a3f0d87a5ae56ed3fdb13",
+      "run": "https://github.com/demrom/ios_system/actions/runs/46075762874/attempts/1",
+      "revision": "793f171414dfc3bc3f4918a9a9cc4815beb6a6e7",
+      "frameworks": {
+        "ios_system": ".build/ios_system.xcframework.zip"
       }
     },
     "ios_system-ffmpeg-xcframeworks": {
@@ -869,10 +874,10 @@
       }
     },
     "a-shell-WasmKitCommand": {
-      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15154097308.zip",
-      "sha256": "857e300df9969ddba8524837591643dd8011eb6dca738012578a65843730d3b7",
-      "run": "https://github.com/demrom/a-shell/actions/runs/45895579926/attempts/1",
-      "revision": "5b24ba54955cc2cdcd3360c9dede75c3ba87ad52",
+      "url": "https://nightly.link/demrom/a-shell/actions/artifacts/15238920467.zip",
+      "sha256": "13fad9a41e0104debb70c71cb211435a65346c201c94e707b29f0eb0dca39946",
+      "run": "https://github.com/demrom/a-shell/actions/runs/46081692878/attempts/1",
+      "revision": "3f2c79a24cc367f8f46d12810bbac8a0e98954d5",
       "frameworks": {
         "WasmKitCommand": "WasmKitCommand.xcframework.zip"
       }
