@@ -1099,7 +1099,9 @@
 		22FFB44429E88AE80054F01F /* url-polyfill.js in Resources */ = {isa = PBXBuildFile; fileRef = 22FFB44329E88AE60054F01F /* url-polyfill.js */; };
 		27937DD7D9B079E79382E010 /* ShellWorkerD.appex in Embed Shell Workers */ = {isa = PBXBuildFile; fileRef = 671E1D67938C7F8A1BF10D84 /* ShellWorkerD.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		2A45EE5BE77CD575DD0ADEBE /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5101D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		359DDEBBC7AB6E4D48032723 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5111D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		35CEEFFA3E32E690A179CFAC /* sshStockCommands.plist in Resources */ = {isa = PBXBuildFile; fileRef = 731431400000000000000004 /* sshStockCommands.plist */; };
 		3AABA6ADD41BDE6C2C6BEC6E /* ios_system.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 228E13F225C95F2D0065D825 /* ios_system.xcframework */; };
 		4096B185162EAE2C4738E1C1 /* ShellWorkers/NativePane.m in Sources */ = {isa = PBXBuildFile; fileRef = CBB6E958A8AF3B33B29AA4A8 /* ShellWorkers/NativePane.m */; };
@@ -1110,9 +1112,12 @@
 		535000000000000000000004 /* Util/CommandEnvironment.swift in Sources */ = {isa = PBXBuildFile; fileRef = 535000000000000000000001 /* Util/CommandEnvironment.swift */; };
 		539578FA38E5117D4FFA6F13 /* ios_system.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 228E13F225C95F2D0065D825 /* ios_system.xcframework */; };
 		556FE5F2A7285723350E4CAC /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5121D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		5588CB35CBA255F519ECBB71 /* ios_system.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 228E13F225C95F2D0065D825 /* ios_system.xcframework */; };
 		59144CB4855198131ED069B3 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5131D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		5A652AAB3F21AD3EEE1DC9B1 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5141D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		601A00000000000000000001 /* ShellWorkers/HostPane.m in Sources */ = {isa = PBXBuildFile; fileRef = 601A00000000000000000002 /* ShellWorkers/HostPane.m */; };
 		60BA73F3EE45C345CD0C593D /* ShellWorkers/Worker.m in Sources */ = {isa = PBXBuildFile; fileRef = BA7967007CF5D5AF7BEE03CE /* ShellWorkers/Worker.m */; };
 		610000000000000000000002 /* TerminalTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 610000000000000000000001 /* TerminalTheme.swift */; };
@@ -1155,6 +1160,7 @@
 		755E22C57BB293CDAD64CB41 /* ShellWorkers/NativePane.m in Sources */ = {isa = PBXBuildFile; fileRef = CBB6E958A8AF3B33B29AA4A8 /* ShellWorkers/NativePane.m */; };
 		7A025EB47CCEBDAA7E49CB3E /* ShellWorkers/Host.swift in Sources */ = {isa = PBXBuildFile; fileRef = D847238C57D48CADF264887A /* ShellWorkers/Host.swift */; };
 		8299DBD0E93022AAEACE5F54 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5151D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		87806CB937978E72E1E59179 /* sshStockCommands.plist in Resources */ = {isa = PBXBuildFile; fileRef = 731431400000000000000004 /* sshStockCommands.plist */; };
 		89483CE425CC48B2008EF012 /* ios_system.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = 228E13F225C95F2D0065D825 /* ios_system.xcframework */; };
 		8F4F306A0A771AF4667582BA /* ShellWorkers/NativePane.m in Sources */ = {isa = PBXBuildFile; fileRef = CBB6E958A8AF3B33B29AA4A8 /* ShellWorkers/NativePane.m */; };
@@ -1162,6 +1168,7 @@
 		948BA9E69DBEE6BFD829414C /* ShellWorkers/NativePane.m in Sources */ = {isa = PBXBuildFile; fileRef = CBB6E958A8AF3B33B29AA4A8 /* ShellWorkers/NativePane.m */; };
 		96976D843556F3E024DE3B2F /* ShellWorkerJ.appex in Embed Shell Workers */ = {isa = PBXBuildFile; fileRef = 93314A863CABFBA3A5626312 /* ShellWorkerJ.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 		A1C0F473B5B02A405758E45F /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5161D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		A22000000000000000000001 /* rg/rg.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A22000000000000000000002 /* rg/rg.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
 		A22600000000000000000003 /* Herdr.xcframework in Frameworks */ = {isa = PBXBuildFile; fileRef = A22600000000000000000004 /* Herdr.xcframework */; };
 		A22600000000000000000001 /* codex/codex.xcframework in Embed Frameworks */ = {isa = PBXBuildFile; fileRef = A22600000000000000000002 /* codex/codex.xcframework */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
@@ -1184,9 +1191,12 @@
 		DB9A503B8C8690B9298B35E3 /* ShellWorkers/Worker.m in Sources */ = {isa = PBXBuildFile; fileRef = BA7967007CF5D5AF7BEE03CE /* ShellWorkers/Worker.m */; };
 		E2CFAA905BF589905A69D32F /* ShellWorkers/Worker.m in Sources */ = {isa = PBXBuildFile; fileRef = BA7967007CF5D5AF7BEE03CE /* ShellWorkers/Worker.m */; };
 		E357BFCCA00A4DD6EF1D0235 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5171D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		E6EE7A32A41968AF7EFAAF71 /* sshStockCommands.plist in Resources */ = {isa = PBXBuildFile; fileRef = 731431400000000000000004 /* sshStockCommands.plist */; };
 		F1632FC1E103CFB4010F7006 /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5181D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		F2D20BDE70DB7C92C03509DE /* Worker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 070AE9F6D58955EE5B3B2FB9 /* Worker.swift */; };
+		D501B5191D8644C093EC914F /* PDFCommands.swift in Sources */ = {isa = PBXBuildFile; fileRef = D501B5001D8644C093EC914F /* PDFCommands.swift */; };
 		FD33E045D3FF5D175364CB7C /* ShellWorkerC.appex in Embed Shell Workers */ = {isa = PBXBuildFile; fileRef = 1D81B2E2F18AE7821D05A7AD /* ShellWorkerC.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
 /* End PBXBuildFile section */
 
@@ -5478,6 +5488,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				359DDEBBC7AB6E4D48032723 /* Worker.swift in Sources */,
+				D501B5111D8644C093EC914F /* PDFCommands.swift in Sources */,
 				E2CFAA905BF589905A69D32F /* ShellWorkers/Worker.m in Sources */,
 				4096B185162EAE2C4738E1C1 /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5632,6 +5643,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				2A45EE5BE77CD575DD0ADEBE /* Worker.swift in Sources */,
+				D501B5101D8644C093EC914F /* PDFCommands.swift in Sources */,
 				DB9A503B8C8690B9298B35E3 /* ShellWorkers/Worker.m in Sources */,
 				8F4F306A0A771AF4667582BA /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5642,6 +5654,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				5A652AAB3F21AD3EEE1DC9B1 /* Worker.swift in Sources */,
+				D501B5141D8644C093EC914F /* PDFCommands.swift in Sources */,
 				72B403FFF4DA5BA1CEDD5717 /* ShellWorkers/Worker.m in Sources */,
 				C14B2CCCCE38CFD39751A8F3 /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5652,6 +5665,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F2D20BDE70DB7C92C03509DE /* Worker.swift in Sources */,
+				D501B5191D8644C093EC914F /* PDFCommands.swift in Sources */,
 				70E66D31CD0F42D23FBC3EFC /* ShellWorkers/Worker.m in Sources */,
 				A85A41CEA814190D8404E105 /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5662,6 +5676,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1C0F473B5B02A405758E45F /* Worker.swift in Sources */,
+				D501B5161D8644C093EC914F /* PDFCommands.swift in Sources */,
 				01254C24560A350B59662101 /* ShellWorkers/Worker.m in Sources */,
 				948BA9E69DBEE6BFD829414C /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5672,6 +5687,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				E357BFCCA00A4DD6EF1D0235 /* Worker.swift in Sources */,
+				D501B5171D8644C093EC914F /* PDFCommands.swift in Sources */,
 				60BA73F3EE45C345CD0C593D /* ShellWorkers/Worker.m in Sources */,
 				755E22C57BB293CDAD64CB41 /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5682,6 +5698,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				59144CB4855198131ED069B3 /* Worker.swift in Sources */,
+				D501B5131D8644C093EC914F /* PDFCommands.swift in Sources */,
 				188B14A9B070A4E709C1A447 /* ShellWorkers/Worker.m in Sources */,
 				C27C502276A1F0301FBC2CBA /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5692,6 +5709,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				8299DBD0E93022AAEACE5F54 /* Worker.swift in Sources */,
+				D501B5151D8644C093EC914F /* PDFCommands.swift in Sources */,
 				B70CFF8BCD5A858CCB5D600B /* ShellWorkers/Worker.m in Sources */,
 				084FF2541A50122906582CAC /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5702,6 +5720,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				556FE5F2A7285723350E4CAC /* Worker.swift in Sources */,
+				D501B5121D8644C093EC914F /* PDFCommands.swift in Sources */,
 				1C7B8B3BAEF7289AACBD231D /* ShellWorkers/Worker.m in Sources */,
 				C3EEB3DED5B57200DA36F34E /* ShellWorkers/NativePane.m in Sources */,
 			);
@@ -5712,6 +5731,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				F1632FC1E103CFB4010F7006 /* Worker.swift in Sources */,
+				D501B5181D8644C093EC914F /* PDFCommands.swift in Sources */,
 				6C8E5746297C24B1080C03AF /* ShellWorkers/Worker.m in Sources */,
 				7407B0C9B5E07D5492D98053 /* ShellWorkers/NativePane.m in Sources */,
 			);

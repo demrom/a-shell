@@ -23,7 +23,11 @@ private enum PDFCommand: String {
     }
 
     func run(argc: Int32, argv: UnsafeMutablePointer<UnsafeMutablePointer<Int8>?>?) -> Int32 {
-        guard let arguments = convertCArguments(argc: argc, argv: argv) else { return 1 }
+        guard argc > 0, let argv else { return 1 }
+        let arguments = UnsafeBufferPointer(start: argv, count: Int(argc)).compactMap { argument in
+            argument.map { String(cString: $0) }
+        }
+        guard arguments.count == Int(argc) else { return 1 }
         return autoreleasepool {
             do {
                 var first = 1
@@ -74,7 +78,7 @@ private enum PDFCommand: String {
                 }
                 guard !document.isLocked else { throw PDFCommandError("PDF is locked: \(input)") }
                 if self == .pdfinfo {
-                    try Self.write("Pages:          \(document.pageCount)\n", to: thread_stdout)
+                    try Self.write("Pages:          \(document.pageCount)\n", to: ios_stdout())
                     return 0
                 }
                 let end = min(last ?? document.pageCount, document.pageCount)
@@ -96,7 +100,7 @@ private enum PDFCommand: String {
                 }
                 return 0
             } catch {
-                fputs("\(rawValue): \(error.localizedDescription)\n", thread_stderr)
+                fputs("\(rawValue): \(error.localizedDescription)\n", ios_stderr())
                 return 1
             }
         }
@@ -133,7 +137,7 @@ private enum PDFCommand: String {
                 let page = try Self.page(document, number)
                 let text = layout ? layoutText(page) : (page.string ?? "")
                 let body = text.trimmingCharacters(in: .newlines)
-                try write(body.isEmpty ? "\u{0c}" : body + (layout ? "\n\u{0c}" : "\n\n\u{0c}"), to: file ?? thread_stdout)
+                try write(body.isEmpty ? "\u{0c}" : body + (layout ? "\n\u{0c}" : "\n\n\u{0c}"), to: file ?? ios_stdout())
             }
         }
     }
@@ -218,6 +222,13 @@ private enum PDFCommand: String {
         CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else { throw PDFCommandError("cannot write PNG: \(output)") }
     }
+}
+
+// Both the main app and each worker have separate ios_system command tables.
+func registerPDFCommands() {
+    replaceCommand("pdftotext", "pdftotext", true)
+    replaceCommand("pdftoppm", "pdftoppm", true)
+    replaceCommand("pdfinfo", "pdfinfo", true)
 }
 
 @_cdecl("pdftotext")

@@ -4,7 +4,9 @@ import Foundation
 // Every extension identity compiles this same source and native pane adapter.
 @main
 final class PaneExtension: AppExtension {
-    required init() {}
+    required init() {
+        registerPDFCommands()
+    }
 
     @AppExtensionPoint.Bind
     var extensionPoint: AppExtensionPoint {
