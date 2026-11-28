@@ -76,8 +76,9 @@ const page = vm.createContext({
             return `0 ${bytes.length}`;
         case 'spawn':
             if (mode === 'fork-exec-rejected') {
-                assert.equal(request.path, '/ashell-process-fixture-missing/executable');
-                return '-44 0'; // ENOENT; no child was admitted.
+                assert.equal(request.path, '');
+                assert.deepEqual(request.argv, ['']);
+                return '-28 0'; // EINVAL; the broker rejects an empty executable name.
             }
             assert.equal(mode, 'popen');
             assert.deepEqual(request.streams, [0, 101, 2]);

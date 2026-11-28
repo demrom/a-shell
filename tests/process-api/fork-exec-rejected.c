@@ -6,11 +6,12 @@
 int main(void) {
     pid_t child = fork();
     if (child == 0) {
-        const char *path = "/ashell-process-fixture-missing/executable";
-        char *const args[] = {(char *)path, NULL};
-        execv(path, args);
+        // The broker rejects an empty executable name before worker admission.
+        char empty[] = "";
+        char *const args[] = {empty, NULL};
+        execv(empty, args);
         _exit(127);
     }
-    if (child != -1 || errno != ENOENT) return 90;
+    if (child != -1 || errno != EINVAL) return 90;
     return puts("process-fork-exec-rejected") < 0;
 }
